@@ -20,10 +20,20 @@ export async function deleteRecord(id: string): Promise<DeleteResult> {
   }
 
   // RLS で user_id = auth.uid() のレコードしか delete できない。
-  const { error } = await supabase.from("records").delete().eq("id", id);
+  // 0 行削除でも error が null のまま戻ってくるため、.select("id") で
+  // 削除対象の存在を明示的に確認する。
+  const { data, error } = await supabase
+    .from("records")
+    .delete()
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     return { ok: false, error: error.message };
+  }
+
+  if (!data || data.length === 0) {
+    return { ok: false, error: "削除対象の記録が見つかりません" };
   }
 
   revalidatePath("/history");

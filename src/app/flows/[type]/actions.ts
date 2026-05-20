@@ -56,13 +56,20 @@ export async function updateFlowRecord(
 
   // RLS で user_id = auth.uid() のレコードしか update できないので
   // 他人の id を渡しても安全に弾かれる。
-  const { error } = await supabase
+  // ただし RLS で 0 行マッチや存在しない id の場合は error が null のまま
+  // 戻ってくるため、.select("id") で更新対象の存在を明示的に確認する。
+  const { data, error } = await supabase
     .from("records")
     .update({ answers })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     return { ok: false, error: error.message };
+  }
+
+  if (!data || data.length === 0) {
+    return { ok: false, error: "更新対象の記録が見つかりません" };
   }
 
   revalidatePath("/history");

@@ -135,6 +135,8 @@ describe("HistoryClient", () => {
 
     expect(confirmSpy).toHaveBeenCalled();
     expect(deleteRecord).toHaveBeenCalledWith("abc");
+    // 削除成功後に router.refresh() で一覧を再取得することを検証
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
     confirmSpy.mockRestore();
   });
 

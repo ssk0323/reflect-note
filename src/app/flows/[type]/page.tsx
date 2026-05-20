@@ -38,8 +38,11 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
       notFound();
     }
 
+    // recordId が変わったら EditClient を再マウントして state をリセット。
+    // useState は初回しか初期化されないため、key で remount を強制する。
     return (
       <EditClient
+        key={data.id}
         flow={flow}
         recordId={data.id}
         initialAnswers={data.answers}

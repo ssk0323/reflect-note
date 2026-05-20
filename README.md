@@ -95,7 +95,7 @@ src/
     auth/callback/           OAuth コールバック
   lib/
     supabase/                Supabase Client/Server/Middleware ヘルパー
-  proxy.ts                   認証ガード（未ログイン redirect + 許可リスト検証）※ Next.js 16 の proxy 規約
+  middleware.ts              認証ガード（未ログイン redirect + 許可リスト検証）
 supabase/
   migrations/                SQL マイグレーション（Supabase SQL Editor で実行）
 docs/

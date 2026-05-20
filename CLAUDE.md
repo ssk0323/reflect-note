@@ -57,7 +57,13 @@
 
 - タイトル: Conventional Commits 準拠（`feat: 振り返り一覧を表示する` など）
 - 本文: PR テンプレートに従う（Summary / Test plan / 関連 Issue）
-- 1 PR = 1 Issue が基本。大きくなりそうなら Issue を分割する
+- **1 Issue は「1 PR で完結」か「エピック型で複数 PR」のどちらか**
+  - 通常の Issue は 1 PR で完結する粒度に切る
+  - エピック型 Issue（マイルストーン相当）は内部にチェックボックスを並べ、複数 PR で少しずつ消化する
+  - 1 PR は ~500 行を目安。レビュー可能なサイズを保つ
+- PR と Issue の関係:
+  - 最後の PR のみ `Closes #N`
+  - 途中の PR は `Refs #N` で Issue に紐づける
 - レビュアー: GitHub Copilot を必ず追加
 - セルフレビューしてから依頼する
 

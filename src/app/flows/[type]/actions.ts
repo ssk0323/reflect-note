@@ -33,6 +33,8 @@ export async function saveFlowRecord(
     return { ok: false, error: error.message };
   }
 
+  // トップの「本日の目標」「今週/今月の目標」は新規 record で即更新したい
+  revalidatePath("/");
   revalidatePath("/history");
   return { ok: true };
 }
@@ -54,13 +56,39 @@ export async function updateFlowRecord(
     return { ok: false, error: "ログインが必要です" };
   }
 
-  // RLS で user_id = auth.uid() のレコードしか update できないので
-  // 他人の id を渡しても安全に弾かれる。
-  // ただし RLS で 0 行マッチや存在しない id の場合は error が null のまま
-  // 戻ってくるため、.select("id") で更新対象の存在を明示的に確認する。
+  // 既存の answers と checks を取得し、値が変わったキーに対応する
+  // checks を破棄する。
+  // 例: task1 を "A" → "B" に編集したら、checks.task1 は false に戻す。
+  // RLS で他人のレコードは取れないので、ここで found = 自分のもの。
+  const { data: existing, error: fetchError } = await supabase
+    .from("records")
+    .select("answers, checks")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchError) {
+    console.error("Failed to read existing record for update", fetchError);
+    return { ok: false, error: "更新前の記録を取得できませんでした" };
+  }
+  if (!existing) {
+    return { ok: false, error: "更新対象の記録が見つかりません" };
+  }
+
+  const oldAnswers = (existing.answers ?? {}) as FlowAnswers;
+  const oldChecks = (existing.checks ?? {}) as Record<string, boolean>;
+  const nextChecks: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(oldChecks)) {
+    // 値が変わっていなければチェック状態を維持
+    if (oldAnswers[key] === answers[key]) {
+      nextChecks[key] = value;
+    }
+  }
+
+  // RLS で user_id = auth.uid() のレコードしか update できない。
+  // 0 行マッチ (RLS / stale id) は .select("id") で検知して error にする。
   const { data, error } = await supabase
     .from("records")
-    .update({ answers })
+    .update({ answers, checks: nextChecks })
     .eq("id", id)
     .select("id");
 
@@ -72,6 +100,7 @@ export async function updateFlowRecord(
     return { ok: false, error: "更新対象の記録が見つかりません" };
   }
 
+  revalidatePath("/");
   revalidatePath("/history");
   return { ok: true };
 }

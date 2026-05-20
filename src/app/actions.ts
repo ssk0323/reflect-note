@@ -3,13 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-export type ToggleResult = { ok: true; checked: boolean } | { ok: false; error: string };
+export type ToggleResult =
+  | { ok: true; checked: boolean }
+  | { ok: false; error: string };
 
 /**
- * records.checks[key] のチェック状態をトグルする。
+ * records.checks[key] を atomic に反転する。
  *
- * 既存の checks を読み込んで反転させ、その上で update を投げる。
- * 同一レコードを並行更新するケースは想定していない (個人利用前提)。
+ * 内部では `toggle_record_check` RPC (jsonb_set + 1 query) を呼ぶ。
+ * read-modify-write の race condition を回避するため、
+ * クライアント側で merge してから update する実装はやめている。
  */
 export async function toggleCheck(
   recordId: string,
@@ -31,39 +34,22 @@ export async function toggleCheck(
     return { ok: false, error: "ログインが必要です" };
   }
 
-  // 現在の checks を読み取り (RLS で他人のレコードは取れない)
-  const { data: existing, error: fetchError } = await supabase
-    .from("records")
-    .select("checks")
-    .eq("id", recordId)
-    .maybeSingle();
+  const { data, error } = await supabase.rpc("toggle_record_check", {
+    p_record_id: recordId,
+    p_key: key,
+  });
 
-  if (fetchError) {
-    console.error("Failed to read checks", fetchError);
-    return { ok: false, error: "現在のチェック状態を取得できませんでした" };
+  if (error) {
+    console.error("toggle_record_check failed", error);
+    return { ok: false, error: "チェックの更新に失敗しました" };
   }
-  if (!existing) {
+
+  // RPC が boolean を返す。RLS で対象行が無い場合は null が返る (update が 0 行)。
+  if (data === null || data === undefined) {
     return { ok: false, error: "対象の記録が見つかりません" };
-  }
-
-  const current = (existing.checks ?? {}) as Record<string, boolean>;
-  const nextValue = !current[key];
-  const nextChecks = { ...current, [key]: nextValue };
-
-  const { data: updated, error: updateError } = await supabase
-    .from("records")
-    .update({ checks: nextChecks })
-    .eq("id", recordId)
-    .select("id");
-
-  if (updateError) {
-    return { ok: false, error: updateError.message };
-  }
-  if (!updated || updated.length === 0) {
-    return { ok: false, error: "更新対象の記録が見つかりません" };
   }
 
   revalidatePath("/");
   revalidatePath("/history");
-  return { ok: true, checked: nextValue };
+  return { ok: true, checked: Boolean(data) };
 }

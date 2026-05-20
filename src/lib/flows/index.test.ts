@@ -2,9 +2,13 @@ import { describe, it, expect } from "vitest";
 import { getFlow } from ".";
 
 describe("getFlow", () => {
-  it("returns the morning flow for 'morning'", () => {
-    const flow = getFlow("morning");
-    expect(flow?.type).toBe("morning");
+  it("returns the correct flow for each of the 6 defined types", () => {
+    expect(getFlow("morning")?.type).toBe("morning");
+    expect(getFlow("night")?.type).toBe("night");
+    expect(getFlow("weeklyGoal")?.type).toBe("weeklyGoal");
+    expect(getFlow("weeklyReview")?.type).toBe("weeklyReview");
+    expect(getFlow("monthlyGoal")?.type).toBe("monthlyGoal");
+    expect(getFlow("monthlyReview")?.type).toBe("monthlyReview");
   });
 
   it("returns null for an unknown flow type", () => {

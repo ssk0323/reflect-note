@@ -1,9 +1,19 @@
 import type { Flow, FlowType } from "./types";
 import { morningFlow } from "./morning";
+import { nightFlow } from "./night";
+import { weeklyGoalFlow } from "./weeklyGoal";
+import { weeklyReviewFlow } from "./weeklyReview";
+import { monthlyGoalFlow } from "./monthlyGoal";
+import { monthlyReviewFlow } from "./monthlyReview";
 
 const FLOWS = {
   morning: morningFlow,
-} satisfies Partial<Record<FlowType, Flow>>;
+  night: nightFlow,
+  weeklyGoal: weeklyGoalFlow,
+  weeklyReview: weeklyReviewFlow,
+  monthlyGoal: monthlyGoalFlow,
+  monthlyReview: monthlyReviewFlow,
+} satisfies Record<FlowType, Flow>;
 
 export type DefinedFlowType = keyof typeof FLOWS;
 
@@ -18,5 +28,10 @@ export function getFlow(type: string): Flow | null {
 
 export const definedFlows = FLOWS;
 export { morningFlow } from "./morning";
+export { nightFlow } from "./night";
+export { weeklyGoalFlow } from "./weeklyGoal";
+export { weeklyReviewFlow } from "./weeklyReview";
+export { monthlyGoalFlow } from "./monthlyGoal";
+export { monthlyReviewFlow } from "./monthlyReview";
 export { FLOW_TYPES } from "./types";
 export type { Flow, FlowType, Question, FlowAnswers } from "./types";

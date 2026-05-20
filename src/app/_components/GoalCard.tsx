@@ -2,10 +2,13 @@ import Link from "next/link";
 import type { RecordRow } from "@/lib/records/types";
 import { CheckableItem } from "./CheckableItem";
 
-type CheckableField = {
+export type CheckableFieldKind = "goal" | "task";
+
+export type CheckableField = {
   key: string;
-  // 表示用のラベル (例: "今日の目標", "タスク 1")
-  fallbackLabel: string;
+  kind: CheckableFieldKind;
+  // チェックボックスの隣に出す短いラベル (例: "目標", "タスク 1")
+  label: string;
 };
 
 type Props = {
@@ -13,7 +16,8 @@ type Props = {
   emoji: string;
   // 記録があれば渡す。なければ未設定状態を表示
   record: RecordRow | null;
-  // チェック対象のフィールド (上から順に表示)
+  // チェック対象のフィールド。goal と task が混在して渡されるが、
+  // 内部で 2 セクションに分けて表示する。
   checkableFields: CheckableField[];
   // 未設定時のメッセージ
   emptyMessage: string;
@@ -21,6 +25,13 @@ type Props = {
   emptyCta: { href: string; label: string };
   // 設定済みでも「編集する」リンクを出すなら href を指定
   editHref?: string;
+};
+
+type VisibleItem = {
+  key: string;
+  kind: CheckableFieldKind;
+  label: string;
+  text: string;
 };
 
 export function GoalCard({
@@ -32,20 +43,26 @@ export function GoalCard({
   emptyCta,
   editHref,
 }: Props) {
-  const visibleItems = record
+  const visibleItems: VisibleItem[] = record
     ? checkableFields
         .map((f) => ({
           key: f.key,
+          kind: f.kind,
+          label: f.label,
           text: record.answers[f.key]?.trim() ?? "",
-          fallback: f.fallbackLabel,
         }))
         .filter((item) => item.text.length > 0)
     : [];
 
+  const goals = visibleItems.filter((i) => i.kind === "goal");
+  const tasks = visibleItems.filter((i) => i.kind === "task");
+
   return (
     <article className="flex flex-col rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex items-center gap-3">
-        <span className="text-2xl">{emoji}</span>
+        <span className="text-2xl" aria-hidden>
+          {emoji}
+        </span>
         <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
           {title}
         </h2>
@@ -65,25 +82,34 @@ export function GoalCard({
         </div>
       ) : (
         <>
-          <div className="mt-4 space-y-2">
+          <div className="mt-4 space-y-5">
             {visibleItems.length === 0 ? (
               <p className="rounded-2xl bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
                 目標とタスクが未入力です。
               </p>
             ) : (
-              visibleItems.map((item) => (
-                <CheckableItem
-                  key={item.key}
-                  recordId={record.id}
-                  fieldKey={item.key}
-                  text={item.text}
-                  initialChecked={record.checks[item.key] === true}
-                />
-              ))
+              <>
+                {goals.length > 0 && (
+                  <CheckableSection
+                    sectionLabel="目標"
+                    accentClass="bg-amber-500"
+                    items={goals}
+                    record={record}
+                  />
+                )}
+                {tasks.length > 0 && (
+                  <CheckableSection
+                    sectionLabel="タスク"
+                    accentClass="bg-sky-500"
+                    items={tasks}
+                    record={record}
+                  />
+                )}
+              </>
             )}
           </div>
           {editHref && (
-            <div className="mt-3 text-right">
+            <div className="mt-4 text-right">
               <Link
                 href={editHref}
                 className="text-xs font-semibold text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
@@ -95,5 +121,43 @@ export function GoalCard({
         </>
       )}
     </article>
+  );
+}
+
+function CheckableSection({
+  sectionLabel,
+  accentClass,
+  items,
+  record,
+}: {
+  sectionLabel: string;
+  accentClass: string;
+  items: VisibleItem[];
+  record: RecordRow;
+}) {
+  return (
+    <section aria-label={sectionLabel}>
+      <div className="mb-2 flex items-center gap-2">
+        <span
+          aria-hidden
+          className={`h-2 w-2 rounded-full ${accentClass}`}
+        />
+        <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+          {sectionLabel}
+        </h3>
+      </div>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <CheckableItem
+            key={item.key}
+            recordId={record.id}
+            fieldKey={item.key}
+            text={item.text}
+            sublabel={item.label}
+            initialChecked={record.checks[item.key] === true}
+          />
+        ))}
+      </div>
+    </section>
   );
 }

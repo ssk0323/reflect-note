@@ -8,6 +8,8 @@ type Props = {
   fieldKey: string;
   text: string;
   initialChecked: boolean;
+  // 「タスク 1」「目標」など、本文の上に小さく表示する補助ラベル
+  sublabel?: string;
 };
 
 export function CheckableItem({
@@ -15,6 +17,7 @@ export function CheckableItem({
   fieldKey,
   text,
   initialChecked,
+  sublabel,
 }: Props) {
   const [checked, setChecked] = useState(initialChecked);
   const [error, setError] = useState<string | null>(null);
@@ -63,14 +66,21 @@ export function CheckableItem({
           disabled={isPending}
           className="mt-1 h-4 w-4 cursor-pointer rounded border-zinc-400 text-zinc-900 focus:ring-zinc-500 disabled:cursor-wait"
         />
-        <span
-          className={`flex-1 whitespace-pre-wrap text-sm leading-6 ${
-            checked
-              ? "text-zinc-500 line-through dark:text-zinc-400"
-              : "text-zinc-900 dark:text-zinc-100"
-          }`}
-        >
-          {text}
+        <span className="flex-1">
+          {sublabel && (
+            <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              {sublabel}
+            </span>
+          )}
+          <span
+            className={`block whitespace-pre-wrap text-sm leading-6 ${
+              checked
+                ? "text-zinc-500 line-through dark:text-zinc-400"
+                : "text-zinc-900 dark:text-zinc-100"
+            }`}
+          >
+            {text}
+          </span>
         </span>
       </label>
       {error && (

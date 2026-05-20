@@ -29,25 +29,27 @@ const flowOrder: Flow["type"][] = [
   "monthlyReview",
 ];
 
-const MORNING_CHECKABLES = [
-  { key: "goal", fallbackLabel: "今日の目標" },
-  { key: "task1", fallbackLabel: "タスク 1" },
-  { key: "task2", fallbackLabel: "タスク 2" },
-  { key: "task3", fallbackLabel: "タスク 3" },
+import type { CheckableField } from "./_components/GoalCard";
+
+const MORNING_CHECKABLES: CheckableField[] = [
+  { key: "goal", kind: "goal", label: "目標" },
+  { key: "task1", kind: "task", label: "タスク 1" },
+  { key: "task2", kind: "task", label: "タスク 2" },
+  { key: "task3", kind: "task", label: "タスク 3" },
 ];
 
-const WEEKLY_GOAL_CHECKABLES = [
-  { key: "weekGoal", fallbackLabel: "今週の目標" },
-  { key: "weekPriority1", fallbackLabel: "優先タスク 1" },
-  { key: "weekPriority2", fallbackLabel: "優先タスク 2" },
-  { key: "weekPriority3", fallbackLabel: "優先タスク 3" },
+const WEEKLY_GOAL_CHECKABLES: CheckableField[] = [
+  { key: "weekGoal", kind: "goal", label: "今週の目標" },
+  { key: "weekPriority1", kind: "task", label: "優先タスク 1" },
+  { key: "weekPriority2", kind: "task", label: "優先タスク 2" },
+  { key: "weekPriority3", kind: "task", label: "優先タスク 3" },
 ];
 
-const MONTHLY_GOAL_CHECKABLES = [
-  { key: "monthGoal", fallbackLabel: "今月の目標" },
-  { key: "monthPriority1", fallbackLabel: "重点タスク 1" },
-  { key: "monthPriority2", fallbackLabel: "重点タスク 2" },
-  { key: "monthPriority3", fallbackLabel: "重点タスク 3" },
+const MONTHLY_GOAL_CHECKABLES: CheckableField[] = [
+  { key: "monthGoal", kind: "goal", label: "今月の目標" },
+  { key: "monthPriority1", kind: "task", label: "重点タスク 1" },
+  { key: "monthPriority2", kind: "task", label: "重点タスク 2" },
+  { key: "monthPriority3", kind: "task", label: "重点タスク 3" },
 ];
 
 async function fetchLatestInPeriod(

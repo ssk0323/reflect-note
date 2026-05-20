@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { getFlow } from "@/lib/flows";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { RecordRow } from "@/lib/records/types";
+import { EditClient } from "./EditClient";
 import { FlowClient } from "./FlowClient";
 
 type PageProps = {
@@ -20,13 +20,12 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
   }
 
   const { edit } = await searchParams;
-  let initialRecord: { id: string; answers: RecordRow["answers"] } | undefined;
 
   if (edit) {
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase
       .from("records")
-      .select("id, type, answers")
+      .select("id, answers")
       .eq("id", edit)
       .eq("type", flow.type)
       .maybeSingle();
@@ -38,8 +37,15 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
     if (!data) {
       notFound();
     }
-    initialRecord = { id: data.id, answers: data.answers };
+
+    return (
+      <EditClient
+        flow={flow}
+        recordId={data.id}
+        initialAnswers={data.answers}
+      />
+    );
   }
 
-  return <FlowClient flow={flow} initialRecord={initialRecord} />;
+  return <FlowClient flow={flow} />;
 }

@@ -3,23 +3,16 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Flow, FlowAnswers, Question } from "@/lib/flows";
-import { saveFlowRecord, updateFlowRecord } from "./actions";
+import { saveFlowRecord } from "./actions";
 
 type Props = {
   flow: Flow;
-  // 編集モードのときに渡される既存 record。新規作成のときは undefined。
-  initialRecord?: {
-    id: string;
-    answers: FlowAnswers;
-  };
 };
 
-export function FlowClient({ flow, initialRecord }: Props) {
+export function FlowClient({ flow }: Props) {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [answers, setAnswers] = useState<FlowAnswers>(
-    initialRecord?.answers ?? {},
-  );
+  const [answers, setAnswers] = useState<FlowAnswers>({});
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -48,11 +41,9 @@ export function FlowClient({ flow, initialRecord }: Props) {
     setError(null);
     startTransition(async () => {
       try {
-        const result = initialRecord
-          ? await updateFlowRecord(initialRecord.id, answers)
-          : await saveFlowRecord(flow.type, answers);
+        const result = await saveFlowRecord(flow.type, answers);
         if (result.ok) {
-          router.push(initialRecord ? "/history" : "/");
+          router.push("/");
         } else {
           setError(result.error ?? "保存に失敗しました");
         }

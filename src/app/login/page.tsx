@@ -26,9 +26,13 @@ export default async function LoginPage({
   const { redirectTo, error } = await searchParams;
   const safeRedirectTo =
     redirectTo && redirectTo.startsWith("/") ? redirectTo : "/";
-  const errorMessage = error
-    ? (ERROR_MESSAGES[error] ?? decodeURIComponent(error))
-    : null;
+
+  // Next.js は searchParams を既にデコード済みで渡してくれるが、
+  // 不正な % シーケンスを含む手動アクセスに備えて防御的にしておく。
+  let errorMessage: string | null = null;
+  if (error) {
+    errorMessage = ERROR_MESSAGES[error] ?? error;
+  }
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center px-6 py-12">

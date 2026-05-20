@@ -39,10 +39,9 @@ pnpm-debug.log*
 dist/
 
 # env files (secrets - never commit)
-.env
-.env.local
-.env.*.local
-# .env.example はテンプレートなのでコミット可
+.env*
+# .env.example はテンプレートなのでコミット可（明示的に negate）
+!.env.example
 
 # vercel
 .vercel

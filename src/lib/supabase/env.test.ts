@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getSupabaseAnonKey, getSupabaseUrl } from "./env";
 
+function restore(name: string, original: string | undefined) {
+  if (original === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = original;
+  }
+}
+
 describe("supabase env helpers", () => {
   const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const originalKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -11,8 +19,8 @@ describe("supabase env helpers", () => {
   });
 
   afterEach(() => {
-    process.env.NEXT_PUBLIC_SUPABASE_URL = originalUrl;
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = originalKey;
+    restore("NEXT_PUBLIC_SUPABASE_URL", originalUrl);
+    restore("NEXT_PUBLIC_SUPABASE_ANON_KEY", originalKey);
   });
 
   it("returns the URL when the env var is set", () => {

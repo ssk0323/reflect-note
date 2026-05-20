@@ -72,7 +72,7 @@ npm start
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY` (新フォーマット `sb_publishable_...`)
 3. **Authentication → Sign In / Providers → Google** を有効化し、Google Cloud で作成した OAuth Client ID / Secret を貼って Save
 4. **SQL Editor** で `supabase/migrations/0001_create_records_table.sql` の内容を実行
-5. `NEXT_PUBLIC_ALLOWED_EMAILS` に自分のメールアドレスを設定（カンマ区切りで複数可）
+5. `ALLOWED_EMAILS` に自分のメールアドレスを設定（カンマ区切りで複数可。`NEXT_PUBLIC_` プレフィックスは付けない）
 
 ## Google Cloud OAuth Client セットアップ（初回のみ）
 

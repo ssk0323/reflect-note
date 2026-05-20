@@ -1,8 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HistoryClient } from "./HistoryClient";
 import type { RecordRow } from "@/lib/records/types";
+
+const deleteRecord = vi.fn();
+const refresh = vi.fn();
+
+vi.mock("./actions", () => ({
+  deleteRecord: (...args: unknown[]) => deleteRecord(...args),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh }),
+}));
 
 function record(
   id: string,
@@ -20,6 +31,11 @@ function record(
 }
 
 describe("HistoryClient", () => {
+  beforeEach(() => {
+    deleteRecord.mockReset();
+    refresh.mockReset();
+  });
+
   it("shows an empty state when there are no records", () => {
     render(<HistoryClient records={[]} />);
     expect(screen.getByText(/まだ記録がありません/)).toBeInTheDocument();
@@ -94,5 +110,46 @@ describe("HistoryClient", () => {
     expect(screen.getByText("今日、気をつけたいことは？")).toBeInTheDocument();
     expect(screen.getByText("T1_VALUE")).toBeInTheDocument();
     expect(screen.getByText("ATTN_VALUE")).toBeInTheDocument();
+  });
+
+  it("renders an edit link to /flows/<type>?edit=<id>", () => {
+    const records: RecordRow[] = [
+      record("abc", "morning", "2026-05-20T03:00:00Z"),
+    ];
+    render(<HistoryClient records={records} />);
+
+    const link = screen.getByRole("link", { name: "編集する" });
+    expect(link).toHaveAttribute("href", "/flows/morning?edit=abc");
+  });
+
+  it("calls deleteRecord after confirm and refreshes the router", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteRecord.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record("abc", "morning", "2026-05-20T03:00:00Z"),
+    ];
+
+    render(<HistoryClient records={records} />);
+    await user.click(screen.getByRole("button", { name: "この記録を削除" }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(deleteRecord).toHaveBeenCalledWith("abc");
+    confirmSpy.mockRestore();
+  });
+
+  it("does NOT call deleteRecord when confirm is cancelled", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record("abc", "morning", "2026-05-20T03:00:00Z"),
+    ];
+
+    render(<HistoryClient records={records} />);
+    await user.click(screen.getByRole("button", { name: "この記録を削除" }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(deleteRecord).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

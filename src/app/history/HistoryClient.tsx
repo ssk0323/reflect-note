@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { definedFlows, type Flow, type FlowType } from "@/lib/flows";
 import {
   formatDate,
@@ -8,6 +10,7 @@ import {
   groupRecordsByDate,
 } from "@/lib/records/group";
 import type { RecordRow } from "@/lib/records/types";
+import { deleteRecord } from "./actions";
 
 type Props = {
   records: RecordRow[];
@@ -181,7 +184,59 @@ function RecordCard({ record }: { record: RecordRow }) {
           <RecordAnswers flow={flow} answers={record.answers} />
         </div>
       </details>
+
+      <div className="mt-4 flex gap-2">
+        <Link
+          href={`/flows/${record.type}?edit=${record.id}`}
+          className="flex-1 rounded-2xl bg-zinc-900 px-4 py-3 text-center text-sm font-semibold text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+        >
+          編集する
+        </Link>
+        <DeleteButton recordId={record.id} />
+      </div>
     </article>
+  );
+}
+
+function DeleteButton({ recordId }: { recordId: string }) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleClick() {
+    if (!window.confirm("この記録を削除しますか？")) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await deleteRecord(recordId);
+        if (result.ok) {
+          router.refresh();
+        } else {
+          setError(result.error ?? "削除に失敗しました");
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "削除に失敗しました");
+      }
+    });
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={isPending}
+        aria-label="この記録を削除"
+        className="rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-600 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+      >
+        {isPending ? "削除中..." : "削除"}
+      </button>
+      {error && (
+        <p role="alert" className="text-xs text-red-600">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

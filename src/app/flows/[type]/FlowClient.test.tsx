@@ -6,9 +6,11 @@ import { nightFlow } from "@/lib/flows/night";
 import { FlowClient } from "./FlowClient";
 
 const saveFlowRecord = vi.fn();
+const updateFlowRecord = vi.fn();
 
 vi.mock("./actions", () => ({
   saveFlowRecord: (...args: unknown[]) => saveFlowRecord(...args),
+  updateFlowRecord: (...args: unknown[]) => updateFlowRecord(...args),
 }));
 
 const push = vi.fn();
@@ -139,6 +141,55 @@ describe("FlowClient (morning)", () => {
     await user.click(screen.getByRole("button", { name: "保存する" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("network down");
+  });
+});
+
+describe("FlowClient (edit mode)", () => {
+  beforeEach(() => {
+    saveFlowRecord.mockReset();
+    updateFlowRecord.mockReset();
+    push.mockReset();
+  });
+
+  it("pre-fills the first answer from initialRecord", () => {
+    render(
+      <FlowClient
+        flow={morningFlow}
+        initialRecord={{
+          id: "abc",
+          answers: { goal: "編集前の目標", task1: "編集前のタスク1" },
+        }}
+      />,
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("編集前の目標");
+  });
+
+  it("calls updateFlowRecord (not save) and redirects to /history on save", async () => {
+    updateFlowRecord.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <FlowClient
+        flow={morningFlow}
+        initialRecord={{
+          id: "abc",
+          answers: { goal: "old goal" },
+        }}
+      />,
+    );
+
+    // 5 問めまで進めて確認画面へ
+    for (let i = 0; i < morningFlow.questions.length - 1; i++) {
+      await user.click(screen.getByRole("button", { name: "次へ" }));
+    }
+    await user.click(screen.getByRole("button", { name: "一覧で確認する" }));
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(updateFlowRecord).toHaveBeenCalledWith(
+      "abc",
+      expect.objectContaining({ goal: "old goal" }),
+    );
+    expect(saveFlowRecord).not.toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith("/history");
   });
 });
 

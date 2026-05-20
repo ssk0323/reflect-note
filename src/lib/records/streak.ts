@@ -45,7 +45,9 @@ function shiftDays(dateKey: string, deltaDays: number): string {
  *
  * - current: 今日 or 昨日まで連続して入力した日数。今日でも昨日でもなければ 0
  *   (= 既に途切れている)
- * - longest: 全期間での最大連続日数
+ * - longest: 渡された records 範囲内での最大連続日数。トップ画面では直近
+ *   STREAK_LOOKBACK_DAYS 日が渡される。歴代の最大を取りたいときは永続化
+ *   テーブルでの集計が必要。
  *
  * 同じ JST 日に複数 record があっても 1 日として扱う。
  */

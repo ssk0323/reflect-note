@@ -106,9 +106,14 @@ export default async function Home() {
   // 過去 35 日分の records を 1 query で取得する。
   // 「本日の morning」「今週の weeklyGoal」「今月の monthlyGoal」も
   // すべてこの期間に含まれるので、追加 fetch せずメモリ派生する。
-  const lookbackStart = new Date(
+  //
+  // 重要: lookback の開始は「N 日前の JST 00:00」に丸める。
+  // `now.getTime() - N*24h` を直接使うと、現在時刻が正午なら最古日の
+  // 午前分が取得対象から漏れ、ストリーク/バッジが過小計上になりうる。
+  const lookbackShifted = new Date(
     now.getTime() - STREAK_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
-  ).toISOString();
+  );
+  const lookbackStart = getJstDayBoundsUtc(lookbackShifted).start;
   const { records: recentRecords, error: recentError } = await fetchRecentRecords(
     supabase,
     lookbackStart,

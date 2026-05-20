@@ -38,11 +38,10 @@ pnpm-debug.log*
 /build
 dist/
 
-# env files (can opt-in for committing if needed)
-.env
-.env.local
-.env.*.local
+# env files (secrets - never commit)
 .env*
+# .env.example はテンプレートなのでコミット可（明示的に negate）
+!.env.example
 
 # vercel
 .vercel

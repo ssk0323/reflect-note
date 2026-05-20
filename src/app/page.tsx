@@ -7,7 +7,16 @@ import {
   getJstMonthBoundsUtc,
   getJstWeekBoundsUtc,
 } from "@/lib/records/period";
+import { computeStreak } from "@/lib/records/streak";
+import { computeAchievements } from "@/lib/records/achievements";
+import { BadgesCard } from "./_components/BadgesCard";
 import { GoalCard, type CheckableField } from "./_components/GoalCard";
+import { StreakCard } from "./_components/StreakCard";
+
+// ストリーク計算のため遡って fetch する日数。今月 + 余裕で過去 31 日
+// 程度を見れば、表示中の current/longest を十分計算できる (もっと長期の
+// "歴代 longest" は別の集計が必要になるが、MVP では 31 日で十分)。
+const STREAK_LOOKBACK_DAYS = 31;
 
 export const dynamic = "force-dynamic";
 
@@ -76,12 +85,32 @@ async function fetchLatestInPeriod(
 }
 
 export default async function Home() {
-  // 3 つのカードで同じ supabase client を共有する (cookies() + client 生成を
+  // 全カードで同じ supabase client を共有する (cookies() + client 生成を
   // 1 回に集約してオーバーヘッドを抑える)。
   const supabase = await createSupabaseServerClient();
-  const dayBounds = getJstDayBoundsUtc();
-  const weekBounds = getJstWeekBoundsUtc();
-  const monthBounds = getJstMonthBoundsUtc();
+  const now = new Date();
+  const dayBounds = getJstDayBoundsUtc(now);
+  const weekBounds = getJstWeekBoundsUtc(now);
+  const monthBounds = getJstMonthBoundsUtc(now);
+
+  // ストリーク + バッジ計算用に過去 31 日分の records をまとめて fetch する。
+  // RLS により自分のレコードのみ取得される。
+  const lookbackStartMs = now.getTime() - STREAK_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+  const lookbackStart = new Date(lookbackStartMs).toISOString();
+  const { data: recentRows, error: recentError } = await supabase
+    .from("records")
+    .select("id, type, answers, checks, created_at, updated_at")
+    .gte("created_at", lookbackStart)
+    .order("created_at", { ascending: false });
+
+  if (recentError) {
+    console.error("Failed to fetch recent records for streak/achievements", recentError);
+  }
+  const recentRecords = (recentRows ?? []) as RecordRow[];
+
+  const morningStreak = computeStreak(recentRecords, "morning", now);
+  const nightStreak = computeStreak(recentRecords, "night", now);
+  const achievements = computeAchievements(recentRecords, now);
 
   const [today, weeklyGoal, monthlyGoal] = await Promise.all([
     fetchLatestInPeriod(supabase, "morning", dayBounds.start, dayBounds.end),
@@ -137,6 +166,14 @@ export default async function Home() {
           emptyCta={{ href: "/flows/monthlyGoal", label: "月の目標を設定する" }}
           editHref={monthlyGoal ? `/flows/monthlyGoal?edit=${monthlyGoal.id}` : undefined}
         />
+      </section>
+
+      <section
+        aria-label="進捗"
+        className="mt-6 grid gap-4 md:grid-cols-2"
+      >
+        <StreakCard morningStreak={morningStreak} nightStreak={nightStreak} />
+        <BadgesCard achievements={achievements} />
       </section>
 
       <h2 className="mt-10 text-sm font-bold text-zinc-500">入力フローを開く</h2>

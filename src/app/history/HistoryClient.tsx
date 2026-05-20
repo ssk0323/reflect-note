@@ -86,9 +86,13 @@ function FilterTabs({
   current: Filter;
   onChange: (next: Filter) => void;
 }) {
+  // ARIA tabs パターンは roving tabIndex / 矢印キー操作 / aria-controls
+  // 等の実装が必要で、現状は提供できないため、シンプルなトグルボタン
+  // セット (aria-pressed) で表現する。
   return (
     <div
-      role="tablist"
+      role="group"
+      aria-label="種別フィルタ"
       className="flex flex-wrap gap-1 rounded-2xl border border-zinc-200 bg-white p-1 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
     >
       {FILTER_OPTIONS.map((opt) => {
@@ -97,8 +101,7 @@ function FilterTabs({
           <button
             key={opt.value}
             type="button"
-            role="tab"
-            aria-selected={isActive}
+            aria-pressed={isActive}
             onClick={() => onChange(opt.value)}
             className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
               isActive

@@ -25,11 +25,12 @@ describe("HistoryClient", () => {
     expect(screen.getByText(/まだ記録がありません/)).toBeInTheDocument();
   });
 
-  it("groups records by created_at date", () => {
+  it("groups records by JST date", () => {
+    // すべて JST 日中の時刻に統一して UTC ↔ JST 越境を避ける
     const records: RecordRow[] = [
-      record("a", "morning", "2026-05-20T08:00:00Z", { goal: "目標A" }),
-      record("b", "night", "2026-05-20T22:00:00Z", { done: "夜A" }),
-      record("c", "morning", "2026-05-19T07:00:00Z", { goal: "目標B" }),
+      record("a", "morning", "2026-05-20T03:00:00Z", { goal: "目標A" }), // JST 12:00 5/20
+      record("b", "night", "2026-05-20T11:00:00Z", { done: "夜A" }), // JST 20:00 5/20
+      record("c", "morning", "2026-05-19T05:00:00Z", { goal: "目標B" }), // JST 14:00 5/19
     ];
 
     render(<HistoryClient records={records} />);
@@ -55,8 +56,11 @@ describe("HistoryClient", () => {
     // 初期状態: 「すべて」で 2 件
     expect(screen.getAllByRole("article")).toHaveLength(2);
 
-    // 「夜」フィルタへ
-    await user.click(screen.getByRole("tab", { name: "夜" }));
+    // 「夜」フィルタへ (aria-pressed button)
+    const nightButton = screen.getByRole("button", { name: "夜" });
+    expect(nightButton).toHaveAttribute("aria-pressed", "false");
+    await user.click(nightButton);
+    expect(nightButton).toHaveAttribute("aria-pressed", "true");
 
     const filtered = screen.getAllByRole("article");
     expect(filtered).toHaveLength(1);

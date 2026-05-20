@@ -7,6 +7,14 @@ export type ToggleResult =
   | { ok: true; checked: boolean }
   | { ok: false; error: string };
 
+// records.checks のキーは answers の question key と同じ形式に限定する。
+// 想定外の長い文字列や記号を弾き、JSONB が肥大化したり意図しないキーが
+// 混入するのを防ぐ (英数字 + アンダースコア、最大 64 文字)。
+const VALID_KEY_REGEX = /^[A-Za-z0-9_]{1,64}$/;
+// UUID v4 など (Supabase の gen_random_uuid 形式)
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * records.checks[key] を atomic に反転する。
  *
@@ -18,11 +26,11 @@ export async function toggleCheck(
   recordId: string,
   key: string,
 ): Promise<ToggleResult> {
-  if (!recordId) {
-    return { ok: false, error: "recordId が指定されていません" };
+  if (!recordId || !UUID_REGEX.test(recordId)) {
+    return { ok: false, error: "recordId が不正です" };
   }
-  if (!key) {
-    return { ok: false, error: "key が指定されていません" };
+  if (!key || !VALID_KEY_REGEX.test(key)) {
+    return { ok: false, error: "key が不正です" };
   }
 
   const supabase = await createSupabaseServerClient();

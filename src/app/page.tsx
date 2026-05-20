@@ -7,9 +7,11 @@ import {
   getJstMonthBoundsUtc,
   getJstWeekBoundsUtc,
 } from "@/lib/records/period";
-import { GoalCard } from "./_components/GoalCard";
+import { GoalCard, type CheckableField } from "./_components/GoalCard";
 
 export const dynamic = "force-dynamic";
+
+type SupabaseServerClient = Awaited<ReturnType<typeof createSupabaseServerClient>>;
 
 const flowMeta: Record<Flow["type"], { emoji: string; description: string }> = {
   morning: { emoji: "🌅", description: "今日の目標とタスク3つを決めます。" },
@@ -28,8 +30,6 @@ const flowOrder: Flow["type"][] = [
   "monthlyGoal",
   "monthlyReview",
 ];
-
-import type { CheckableField } from "./_components/GoalCard";
 
 const MORNING_CHECKABLES: CheckableField[] = [
   { key: "goal", kind: "goal", label: "目標" },
@@ -53,11 +53,11 @@ const MONTHLY_GOAL_CHECKABLES: CheckableField[] = [
 ];
 
 async function fetchLatestInPeriod(
+  supabase: SupabaseServerClient,
   type: Flow["type"],
   start: string,
   end: string,
 ): Promise<RecordRow | null> {
-  const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from("records")
     .select("id, type, answers, checks, created_at, updated_at")
@@ -76,14 +76,22 @@ async function fetchLatestInPeriod(
 }
 
 export default async function Home() {
+  // 3 つのカードで同じ supabase client を共有する (cookies() + client 生成を
+  // 1 回に集約してオーバーヘッドを抑える)。
+  const supabase = await createSupabaseServerClient();
   const dayBounds = getJstDayBoundsUtc();
   const weekBounds = getJstWeekBoundsUtc();
   const monthBounds = getJstMonthBoundsUtc();
 
   const [today, weeklyGoal, monthlyGoal] = await Promise.all([
-    fetchLatestInPeriod("morning", dayBounds.start, dayBounds.end),
-    fetchLatestInPeriod("weeklyGoal", weekBounds.start, weekBounds.end),
-    fetchLatestInPeriod("monthlyGoal", monthBounds.start, monthBounds.end),
+    fetchLatestInPeriod(supabase, "morning", dayBounds.start, dayBounds.end),
+    fetchLatestInPeriod(supabase, "weeklyGoal", weekBounds.start, weekBounds.end),
+    fetchLatestInPeriod(
+      supabase,
+      "monthlyGoal",
+      monthBounds.start,
+      monthBounds.end,
+    ),
   ]);
 
   return (

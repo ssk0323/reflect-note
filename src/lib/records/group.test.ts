@@ -7,6 +7,7 @@ function row(id: string, createdAt: string, type: RecordRow["type"] = "morning")
     id,
     type,
     answers: {},
+    checks: {},
     created_at: createdAt,
     updated_at: createdAt,
   };

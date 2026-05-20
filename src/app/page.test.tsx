@@ -9,4 +9,12 @@ describe("Home page", () => {
       screen.getByRole("heading", { name: /reflect-note/i }),
     ).toBeInTheDocument();
   });
+
+  it("links to the morning setup flow", () => {
+    render(<Home />);
+    const link = screen.getByRole("link", {
+      name: /朝のセットアップを始める/,
+    });
+    expect(link).toHaveAttribute("href", "/flows/morning");
+  });
 });

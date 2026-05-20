@@ -97,4 +97,18 @@ describe("computeAchievements", () => {
       "monthly_count",
     );
   });
+
+  // regression: Supabase が +00:00 表記やマイクロ秒精度で返しても
+  // withinBounds が誤判定しないこと
+  it("handles +00:00 timestamp format (Supabase variant)", () => {
+    vi.setSystemTime(new Date("2026-05-20T03:00:00Z"));
+    const records = [
+      // 月曜 00:00 JST = 日曜 15:00 UTC の境界、+00:00 形式
+      r("a", "weeklyGoal", "2026-05-17T15:00:00.123456+00:00"),
+      r("b", "weeklyReview", "2026-05-24T08:30:00+00:00"),
+    ];
+    expect(computeAchievements(records).map((a) => a.code)).toContain(
+      "weekly_complete",
+    );
+  });
 });

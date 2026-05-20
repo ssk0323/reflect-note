@@ -6,8 +6,16 @@ import {
   getJstDayBoundsUtc,
   getJstMonthBoundsUtc,
   getJstWeekBoundsUtc,
+  type BoundsUtc,
 } from "@/lib/records/period";
+import {
+  STREAK_LOOKBACK_DAYS,
+  computeStreak,
+} from "@/lib/records/streak";
+import { computeAchievements } from "@/lib/records/achievements";
+import { BadgesCard } from "./_components/BadgesCard";
 import { GoalCard, type CheckableField } from "./_components/GoalCard";
+import { StreakCard } from "./_components/StreakCard";
 
 export const dynamic = "force-dynamic";
 
@@ -52,47 +60,72 @@ const MONTHLY_GOAL_CHECKABLES: CheckableField[] = [
   { key: "monthPriority3", kind: "task", label: "重点タスク 3" },
 ];
 
-async function fetchLatestInPeriod(
-  supabase: SupabaseServerClient,
+// recentRecords (created_at desc) から、指定 type かつ指定期間内の
+// 最新 1 件を返す。降順なので最初に一致したものが最新。
+function pickLatestInBounds(
+  records: RecordRow[],
   type: Flow["type"],
-  start: string,
-  end: string,
-): Promise<RecordRow | null> {
+  bounds: BoundsUtc,
+): RecordRow | null {
+  const startMs = Date.parse(bounds.start);
+  const endMs = Date.parse(bounds.end);
+  for (const r of records) {
+    if (r.type !== type) continue;
+    const t = Date.parse(r.created_at);
+    if (t >= startMs && t < endMs) return r;
+  }
+  return null;
+}
+
+async function fetchRecentRecords(
+  supabase: SupabaseServerClient,
+  lookbackStart: string,
+): Promise<{ records: RecordRow[]; error: string | null }> {
   const { data, error } = await supabase
     .from("records")
     .select("id, type, answers, checks, created_at, updated_at")
-    .eq("type", type)
-    .gte("created_at", start)
-    .lt("created_at", end)
+    .gte("created_at", lookbackStart)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1000); // PostgREST デフォルト上限 (1000) での silent truncation を明示
 
   if (error) {
-    console.error(`Failed to fetch ${type} in period`, error);
-    return null;
+    console.error("Failed to fetch recent records", error);
+    return { records: [], error: error.message };
   }
-  return (data ?? null) as RecordRow | null;
+  return { records: (data ?? []) as RecordRow[], error: null };
 }
 
 export default async function Home() {
-  // 3 つのカードで同じ supabase client を共有する (cookies() + client 生成を
-  // 1 回に集約してオーバーヘッドを抑える)。
+  // 全カードで同じ supabase client を共有 (cookies() + client 生成を 1 回に集約)
   const supabase = await createSupabaseServerClient();
-  const dayBounds = getJstDayBoundsUtc();
-  const weekBounds = getJstWeekBoundsUtc();
-  const monthBounds = getJstMonthBoundsUtc();
+  const now = new Date();
+  const dayBounds = getJstDayBoundsUtc(now);
+  const weekBounds = getJstWeekBoundsUtc(now);
+  const monthBounds = getJstMonthBoundsUtc(now);
 
-  const [today, weeklyGoal, monthlyGoal] = await Promise.all([
-    fetchLatestInPeriod(supabase, "morning", dayBounds.start, dayBounds.end),
-    fetchLatestInPeriod(supabase, "weeklyGoal", weekBounds.start, weekBounds.end),
-    fetchLatestInPeriod(
-      supabase,
-      "monthlyGoal",
-      monthBounds.start,
-      monthBounds.end,
-    ),
-  ]);
+  // 過去 35 日分の records を 1 query で取得する。
+  // 「本日の morning」「今週の weeklyGoal」「今月の monthlyGoal」も
+  // すべてこの期間に含まれるので、追加 fetch せずメモリ派生する。
+  //
+  // 重要: lookback の開始は「N 日前の JST 00:00」に丸める。
+  // `now.getTime() - N*24h` を直接使うと、現在時刻が正午なら最古日の
+  // 午前分が取得対象から漏れ、ストリーク/バッジが過小計上になりうる。
+  const lookbackShifted = new Date(
+    now.getTime() - STREAK_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  );
+  const lookbackStart = getJstDayBoundsUtc(lookbackShifted).start;
+  const { records: recentRecords, error: recentError } = await fetchRecentRecords(
+    supabase,
+    lookbackStart,
+  );
+
+  const morningStreak = computeStreak(recentRecords, "morning", now);
+  const nightStreak = computeStreak(recentRecords, "night", now);
+  const achievements = computeAchievements(recentRecords, now);
+
+  const today = pickLatestInBounds(recentRecords, "morning", dayBounds);
+  const weeklyGoal = pickLatestInBounds(recentRecords, "weeklyGoal", weekBounds);
+  const monthlyGoal = pickLatestInBounds(recentRecords, "monthlyGoal", monthBounds);
 
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
@@ -139,6 +172,18 @@ export default async function Home() {
         />
       </section>
 
+      <section
+        aria-label="ストリークとバッジ"
+        className="mt-6 grid gap-4 md:grid-cols-2"
+      >
+        <StreakCard
+          morningStreak={morningStreak}
+          nightStreak={nightStreak}
+          error={recentError}
+        />
+        <BadgesCard achievements={achievements} error={recentError} />
+      </section>
+
       <h2 className="mt-10 text-sm font-bold text-zinc-500">入力フローを開く</h2>
       <section className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {flowOrder.map((type) => {
@@ -150,7 +195,9 @@ export default async function Home() {
               href={`/flows/${type}`}
               className="group block rounded-3xl border border-zinc-200 bg-white p-6 text-left shadow-sm transition hover:scale-[1.01] hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950"
             >
-              <div className="text-3xl">{meta.emoji}</div>
+              <div className="text-3xl" aria-hidden>
+                {meta.emoji}
+              </div>
               <h3 className="mt-4 text-lg font-bold text-zinc-900 dark:text-zinc-50">
                 {flow.label}
               </h3>

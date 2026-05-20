@@ -27,4 +27,10 @@ describe("Home page", () => {
       expect(link).toHaveAttribute("href", href);
     }
   });
+
+  it("links to /history", () => {
+    render(<Home />);
+    const link = screen.getByRole("link", { name: /過去の記録を見る/ });
+    expect(link).toHaveAttribute("href", "/history");
+  });
 });

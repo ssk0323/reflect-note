@@ -13,19 +13,17 @@ describe("Home page", () => {
 
   it("shows links for all 6 flows", () => {
     render(<Home />);
-    const expected: Array<[string, string]> = [
+    const expected: Array<[string, RegExp]> = [
       ["/flows/morning", /朝のセットアップ/],
       ["/flows/night", /夜のリフレクション/],
       ["/flows/weeklyGoal", /週の目標設定/],
       ["/flows/weeklyReview", /週の振り返り/],
       ["/flows/monthlyGoal", /月の目標設定/],
       ["/flows/monthlyReview", /月の振り返り/],
-    ] as unknown as Array<[string, string]>;
+    ];
 
     for (const [href, name] of expected) {
-      const link = screen.getByRole("link", {
-        name: name as unknown as RegExp,
-      });
+      const link = screen.getByRole("link", { name });
       expect(link).toHaveAttribute("href", href);
     }
   });

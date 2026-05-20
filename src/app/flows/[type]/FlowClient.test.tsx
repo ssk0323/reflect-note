@@ -175,12 +175,12 @@ describe("FlowClient (night, group question)", () => {
     for (let i = 0; i < 5; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
     }
-    const textareas = screen.getAllByRole("textbox");
-    // 4 個の group field がレンダリングされている想定
-    await user.type(textareas[0], "朝の話");
-    await user.type(textareas[1], "午前の話");
-    await user.type(textareas[2], "午後の話");
-    await user.type(textareas[3], "夜の話");
+
+    // ラベル経由で取得し、index 依存を避ける
+    await user.type(screen.getByLabelText("朝"), "朝の話");
+    await user.type(screen.getByLabelText("午前"), "午前の話");
+    await user.type(screen.getByLabelText("午後"), "午後の話");
+    await user.type(screen.getByLabelText("夜"), "夜の話");
 
     // 残り 1 問進めて確認画面へ
     await user.click(screen.getByRole("button", { name: "次へ" }));

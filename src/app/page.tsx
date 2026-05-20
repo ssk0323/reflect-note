@@ -74,6 +74,15 @@ export default function Home() {
           );
         })}
       </section>
+
+      <section className="mt-6 flex justify-end">
+        <Link
+          href="/history"
+          className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
+        >
+          過去の記録を見る →
+        </Link>
+      </section>
     </main>
   );
 }

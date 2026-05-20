@@ -2,6 +2,7 @@ import type { Achievement } from "@/lib/records/achievements";
 
 type Props = {
   achievements: Achievement[];
+  error?: string | null;
 };
 
 // バッジ種別ごとの絵文字
@@ -11,7 +12,7 @@ const ACHIEVEMENT_ICONS: Record<Achievement["code"], string> = {
   monthly_count: "🏆",
 };
 
-export function BadgesCard({ achievements }: Props) {
+export function BadgesCard({ achievements, error }: Props) {
   return (
     <article
       aria-label="バッジ"
@@ -26,7 +27,14 @@ export function BadgesCard({ achievements }: Props) {
         </h2>
       </div>
 
-      {achievements.length === 0 ? (
+      {error ? (
+        <p
+          role="alert"
+          className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm leading-6 text-red-700 dark:bg-red-950 dark:text-red-200"
+        >
+          バッジを読み込めませんでした。時間をおいて再度お試しください。
+        </p>
+      ) : achievements.length === 0 ? (
         <p className="mt-4 rounded-2xl bg-zinc-50 p-4 text-sm leading-6 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
           まだバッジはありません。週次・月次の入力を続けると獲得できます。
         </p>

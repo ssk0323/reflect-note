@@ -1,10 +1,18 @@
 import type { RecordRow } from "./types";
 import type { FlowType } from "@/lib/flows";
 
+// トップ画面でストリーク計算用に過去から取得する日数。
+// 月境界 (例: 31 日締めでアクセス) でも今月分を確実にカバーできるよう、
+// 月の最大日数 (31) より 4 日広めに取って 35 日にしている。
+// 注意: longest は「この期間内の最大連続日数」を意味する。歴代の最長は
+// 別途集計テーブル (将来の streaks テーブル) に永続化する想定。
+export const STREAK_LOOKBACK_DAYS = 35;
+
 export type Streak = {
   /** 今日 or 昨日まで連続して入力した日数。途切れていたら 0 */
   current: number;
-  /** 過去全期間における最大連続日数 */
+  /** 渡された records 範囲内での最大連続日数 (= 直近 STREAK_LOOKBACK_DAYS 日)。
+   *  「歴代の最大」を表したい場合は永続化テーブルが必要。 */
   longest: number;
   /** 最後に入力した JST 日付 (YYYY-MM-DD)。なしなら null */
   lastDate: string | null;

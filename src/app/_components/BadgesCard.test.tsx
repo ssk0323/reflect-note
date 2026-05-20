@@ -13,6 +13,13 @@ describe("BadgesCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows an error message when error is provided", () => {
+    render(<BadgesCard achievements={[]} error="DB unreachable" />);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "バッジを読み込めませんでした",
+    );
+  });
+
   it("renders each achievement with its title and description", () => {
     const achievements: Achievement[] = [
       {

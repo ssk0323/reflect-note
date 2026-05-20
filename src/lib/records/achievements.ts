@@ -20,7 +20,12 @@ export type Achievement = {
 };
 
 function withinBounds(record: RecordRow, bounds: BoundsUtc): boolean {
-  return record.created_at >= bounds.start && record.created_at < bounds.end;
+  // bounds は `new Date().toISOString()` 由来でミリ秒 3 桁の `Z` 表記固定だが、
+  // record.created_at は Supabase 側で `+00:00` 表記やマイクロ秒精度になる
+  // 可能性があり、文字列比較だと境界で誤判定する。Date.parse でタイムスタンプ
+  // 数値化してから比較する。
+  const t = Date.parse(record.created_at);
+  return t >= Date.parse(bounds.start) && t < Date.parse(bounds.end);
 }
 
 /**

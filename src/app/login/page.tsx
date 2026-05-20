@@ -7,6 +7,8 @@ type SearchParams = Promise<{ redirectTo?: string; error?: string }>;
 const ERROR_MESSAGES: Record<string, string> = {
   forbidden_email: "このメールアドレスはログインを許可されていません。",
   missing_code: "認証コードが取得できませんでした。もう一度お試しください。",
+  allowlist_not_configured:
+    "サーバー側で許可リスト (ALLOWED_EMAILS) が設定されていないため、ログインを受け付けられません。管理者に連絡してください。",
 };
 
 export default async function LoginPage({

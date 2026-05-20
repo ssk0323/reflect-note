@@ -49,14 +49,19 @@ export async function updateSession(request: NextRequest) {
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
 
   if (user) {
+    // fail-closed: ALLOWED_EMAILS が未設定 / 空のときは全員拒否する。
+    // 設定漏れで誰でもログインできる事故を防ぐため、明示設定を要求する。
     const allowed = getAllowedEmails();
     const email = user.email?.toLowerCase();
-    if (allowed.length > 0 && (!email || !allowed.includes(email))) {
+    if (allowed.length === 0 || !email || !allowed.includes(email)) {
       await supabase.auth.signOut();
       const loginUrl = request.nextUrl.clone();
       loginUrl.pathname = "/login";
       loginUrl.search = "";
-      loginUrl.searchParams.set("error", "forbidden_email");
+      loginUrl.searchParams.set(
+        "error",
+        allowed.length === 0 ? "allowlist_not_configured" : "forbidden_email",
+      );
       return redirectWithCookies(response, loginUrl);
     }
   }

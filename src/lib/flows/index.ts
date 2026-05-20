@@ -8,7 +8,9 @@ const FLOWS = {
 export type DefinedFlowType = keyof typeof FLOWS;
 
 export function getFlow(type: string): Flow | null {
-  if (type in FLOWS) {
+  // prototype-key (toString, constructor, __proto__ など) で `in` 演算子が
+  // true を返してしまう問題を避けるため、own property のみを許可する。
+  if (Object.hasOwn(FLOWS, type)) {
     return FLOWS[type as DefinedFlowType];
   }
   return null;

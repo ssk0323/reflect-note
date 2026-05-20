@@ -40,11 +40,16 @@ export function FlowClient({ flow }: Props) {
   function handleSave() {
     setError(null);
     startTransition(async () => {
-      const result = await saveFlowRecord(flow.type, answers);
-      if (result.ok) {
-        router.push("/");
-      } else {
-        setError(result.error ?? "保存に失敗しました");
+      try {
+        const result = await saveFlowRecord(flow.type, answers);
+        if (result.ok) {
+          router.push("/");
+        } else {
+          setError(result.error ?? "保存に失敗しました");
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "保存に失敗しました";
+        setError(message);
       }
     });
   }
@@ -198,7 +203,8 @@ function ConfirmScreen({
       <button
         type="button"
         onClick={onBack}
-        className="mb-6 text-sm font-semibold text-zinc-500 hover:text-zinc-900"
+        disabled={isPending}
+        className="mb-6 text-sm font-semibold text-zinc-500 transition hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
       >
         ← 入力に戻る
       </button>

@@ -125,4 +125,18 @@ describe("FlowClient (morning)", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   });
+
+  it("shows error message when saveFlowRecord throws", async () => {
+    saveFlowRecord.mockRejectedValue(new Error("network down"));
+    const user = userEvent.setup();
+    render(<FlowClient flow={morningFlow} />);
+
+    for (let i = 0; i < morningFlow.questions.length - 1; i++) {
+      await user.click(screen.getByRole("button", { name: "次へ" }));
+    }
+    await user.click(screen.getByRole("button", { name: "一覧で確認する" }));
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("network down");
+  });
 });

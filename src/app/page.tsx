@@ -16,6 +16,7 @@ import {
 import { computeAchievements } from "@/lib/records/achievements";
 import {
   addDays,
+  addMonths,
   resolveRecordDate,
   startOfJstMonth,
   startOfJstWeek,
@@ -184,11 +185,7 @@ export default async function Home() {
   const weekStart = startOfJstWeek(todayKey);
   const weekEndExclusive = addDays(weekStart, 7);
   const monthStart = startOfJstMonth(todayKey);
-  // 翌月 1 日 = monthStart の年月を +1
-  const [my, mm] = monthStart.split("-").map(Number);
-  const nextMy = mm === 12 ? my + 1 : my;
-  const nextMm = mm === 12 ? 1 : mm + 1;
-  const monthEndExclusive = `${String(nextMy).padStart(4, "0")}-${String(nextMm).padStart(2, "0")}-01`;
+  const monthEndExclusive = addMonths(monthStart, 1);
 
   const todayMorning = pickLatestInBoundsByDateRange(
     recentRecords,

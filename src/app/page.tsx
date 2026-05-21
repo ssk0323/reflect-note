@@ -80,15 +80,23 @@ async function fetchRecentRecords(
 }
 
 /** JST の時刻と、今日の morning/night の有無からヒーローの提案モードを決める。
- *  - 04:00-15:00: morning 未入力なら朝を提案、済なら夜（夕方寄りでも事前にプッシュ）
- *  - 15:00-04:00: night 未入力なら夜を提案、済なら done
- *  両方済んでいれば常に done。 */
+ *
+ *  ルール:
+ *  - 両方済 → "done"
+ *  - どちらか片方済 → 書いてない方を提案 (時間帯に関わらず)
+ *  - 両方未済 → 04:00-15:00 は "morning"、それ以外は "night"
+ *
+ *  片方済の場合に時間帯を無視する理由: 例えば夜 22 時に night 未入力で morning 済の
+ *  ケースは「夜を書きに来ている」のが自然。逆に朝 6 時に morning 未入力で night 済の
+ *  (前夜が遅すぎて翌朝に night を書いた) ケースは「朝を書きに来ている」のが自然。 */
 function pickHeroMode(
   now: Date,
   todayMorning: RecordRow | null,
   todayNight: RecordRow | null,
 ): HeroMode {
   if (todayMorning && todayNight) return "done";
+  if (todayMorning) return "night";
+  if (todayNight) return "morning";
   const hourJst = Number(
     new Intl.DateTimeFormat("en-US", {
       timeZone: "Asia/Tokyo",
@@ -96,11 +104,7 @@ function pickHeroMode(
       hour12: false,
     }).format(now),
   );
-  const isMorningWindow = hourJst >= 4 && hourJst < 15;
-  if (isMorningWindow) {
-    return todayMorning ? "night" : "morning";
-  }
-  return todayNight ? "morning" : "night";
+  return hourJst >= 4 && hourJst < 15 ? "morning" : "night";
 }
 
 function pickGreeting(now: Date): string {

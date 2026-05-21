@@ -23,19 +23,12 @@
   --sketch-radius-btn: 14px 18px 12px 16px / 14px 12px 18px 14px;
 }
 
+/* Tailwind が拾うトークンはフォントだけ (`font-sans` / `font-mono` utility 用)。
+ * カラーは :root の `--color-*` を `var()` で直接参照する形で運用する。
+ * `@theme inline { --color-bg: var(--color-bg) }` のような同名自己参照は
+ * Tailwind の inline 展開で値が解決できなくなる懸念があるため避ける
+ * (Copilot review PR #29 で指摘あり)。 */
 @theme inline {
-  --color-bg: var(--color-bg);
-  --color-bg-2: var(--color-bg-2);
-  --color-bg-3: var(--color-bg-3);
-  --color-ink: var(--color-ink);
-  --color-ink-2: var(--color-ink-2);
-  --color-ink-3: var(--color-ink-3);
-  --color-ink-4: var(--color-ink-4);
-  --color-line: var(--color-line);
-  --color-line-soft: var(--color-line-soft);
-  --color-accent: var(--color-accent);
-  --color-accent-soft: var(--color-accent-soft);
-  --color-warn: var(--color-warn);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }

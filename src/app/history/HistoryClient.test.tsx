@@ -31,6 +31,12 @@ function record(
   };
 }
 
+const DEFAULT_PROPS = {
+  year: 2026,
+  todayDate: "2026-05-21",
+  todayYear: 2026,
+};
+
 describe("HistoryClient", () => {
   beforeEach(() => {
     deleteRecord.mockReset();
@@ -38,98 +44,126 @@ describe("HistoryClient", () => {
   });
 
   it("renders a back-to-home link", () => {
-    render(<HistoryClient records={[]} />);
+    render(<HistoryClient records={[]} {...DEFAULT_PROPS} />);
     const link = screen.getByRole("link", { name: /ホームへ戻る/ });
     expect(link).toHaveAttribute("href", "/");
   });
 
   it("shows an empty state when there are no records", () => {
-    render(<HistoryClient records={[]} />);
+    render(<HistoryClient records={[]} {...DEFAULT_PROPS} />);
     expect(screen.getByText(/まだ記録がありません/)).toBeInTheDocument();
   });
 
-  it("groups records by JST date", () => {
-    // すべて JST 日中の時刻に統一して UTC ↔ JST 越境を避ける
+  it("件数バッジ付きフィルタチップが種別ごとに件数を出す", () => {
     const records: RecordRow[] = [
-      record("a", "morning", "2026-05-20T03:00:00Z", { goal: "目標A" }), // JST 12:00 5/20
-      record("b", "night", "2026-05-20T11:00:00Z", { done: "夜A" }), // JST 20:00 5/20
-      record("c", "morning", "2026-05-19T05:00:00Z", { goal: "目標B" }), // JST 14:00 5/19
+      record("a", "morning", "2026-05-20T03:00:00Z"),
+      record("b", "morning", "2026-05-19T03:00:00Z"),
+      record("c", "night", "2026-05-20T13:00:00Z"),
+    ];
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    expect(screen.getByRole("button", { name: /すべて 3/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /朝 2/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /夜 1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /週目標 0/ })).toBeInTheDocument();
+  });
+
+  it("List ビューに切り替えると日付グループで表示される", async () => {
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record("a", "morning", "2026-05-20T03:00:00Z", { goal: "目標A" }),
+      record("b", "night", "2026-05-20T11:00:00Z", { done: "夜A" }),
+      record("c", "morning", "2026-05-19T05:00:00Z", { goal: "目標B" }),
     ];
 
-    render(<HistoryClient records={records} />);
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
 
-    // 日付セクションが 2 つある
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
+
     const sections = screen.getAllByRole("region", { name: /2026年5月/ });
     expect(sections).toHaveLength(2);
-
-    // 2026-05-20 のセクションに 2 件、2026-05-19 のセクションに 1 件
     expect(within(sections[0]).getAllByRole("article")).toHaveLength(2);
     expect(within(sections[1]).getAllByRole("article")).toHaveLength(1);
   });
 
-  it("filters by record type", async () => {
+  it("List ビューでフィルタを変えると表示が絞られる", async () => {
     const user = userEvent.setup();
     const records: RecordRow[] = [
       record("a", "morning", "2026-05-20T08:00:00Z", { goal: "目標A" }),
       record("b", "night", "2026-05-20T22:00:00Z", { done: "夜A" }),
     ];
 
-    render(<HistoryClient records={records} />);
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
 
-    // 初期状態: 「すべて」で 2 件
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
+
     expect(screen.getAllByRole("article")).toHaveLength(2);
 
-    // 「夜」フィルタへ (aria-pressed button)
-    const nightButton = screen.getByRole("button", { name: "夜" });
+    const nightButton = screen.getByRole("button", { name: /夜 1/ });
     expect(nightButton).toHaveAttribute("aria-pressed", "false");
     await user.click(nightButton);
     expect(nightButton).toHaveAttribute("aria-pressed", "true");
 
-    const filtered = screen.getAllByRole("article");
-    expect(filtered).toHaveLength(1);
-    expect(within(filtered[0]).getByText("夜のリフレクション")).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(1);
   });
 
-  it("renders all question titles and answers in the accordion details", async () => {
+  it("Calendar ビューで日付クリックすると右ペインに記録が出る", async () => {
     const user = userEvent.setup();
     const records: RecordRow[] = [
-      record("a", "morning", "2026-05-20T08:00:00Z", {
-        goal: "GOAL_VALUE",
-        task1: "T1_VALUE",
-        attention: "ATTN_VALUE",
-      }),
+      record("a", "morning", "2026-05-20T03:00:00Z", { goal: "目標A" }),
     ];
 
-    render(<HistoryClient records={records} />);
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
 
-    // details 要素は初期状態で閉じている
-    const details = screen.getByText("内容を見る").closest("details");
-    expect(details).not.toBeNull();
-    expect(details?.open).toBe(false);
+    // 5/20 を選ぶ
+    await user.click(screen.getByRole("gridcell", { name: /20日/ }));
 
-    // クリックで開く
-    await user.click(screen.getByText("内容を見る"));
-    expect(details?.open).toBe(true);
-
-    // 質問タイトルとそれぞれの answer が DOM に存在
-    expect(screen.getByText("今日の目標は？")).toBeInTheDocument();
-    expect(screen.getByText("今日やるタスク 1つ目は？")).toBeInTheDocument();
-    expect(screen.getByText("今日、気をつけたいことは？")).toBeInTheDocument();
-    expect(screen.getByText("T1_VALUE")).toBeInTheDocument();
-    expect(screen.getByText("ATTN_VALUE")).toBeInTheDocument();
+    const region = screen.getByRole("region", { name: /選択日の記録/ });
+    expect(within(region).getByRole("article")).toBeInTheDocument();
   });
 
-  it("renders an edit link to /flows/<type>?edit=<id>", () => {
+  it("年切替 chip は前年/翌年へのリンク", () => {
+    render(<HistoryClient records={[]} {...DEFAULT_PROPS} />);
+
+    expect(screen.getByRole("link", { name: /‹ 2025/ })).toHaveAttribute(
+      "href",
+      "/history?year=2025",
+    );
+    expect(screen.getByRole("link", { name: /2027 ›/ })).toHaveAttribute(
+      "href",
+      "/history?year=2027",
+    );
+  });
+
+  it("過去年表示時は年の足跡見出しに表示年が反映される", () => {
+    render(
+      <HistoryClient records={[]} year={2024} todayDate="2026-05-21" todayYear={2026} />,
+    );
+    expect(screen.getByText(/2024年の足跡/)).toBeInTheDocument();
+  });
+
+  it("年間ヒートマップが描画される (role=img + aria-label)", () => {
+    render(<HistoryClient records={[]} {...DEFAULT_PROPS} />);
+    expect(
+      screen.getByRole("img", { name: /2026年の記録ヒートマップ/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("記録カードに編集リンクが /flows/<type>?edit=<id> として張られる", async () => {
+    const user = userEvent.setup();
     const records: RecordRow[] = [
       record("abc", "morning", "2026-05-20T03:00:00Z"),
     ];
-    render(<HistoryClient records={records} />);
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    // List ビューに切り替えて編集リンクを検出
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
 
     const link = screen.getByRole("link", { name: "編集する" });
     expect(link).toHaveAttribute("href", "/flows/morning?edit=abc");
   });
 
-  it("calls deleteRecord after confirm and refreshes the router", async () => {
+  it("削除ボタンは confirm 承認後に deleteRecord を呼ぶ", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     deleteRecord.mockResolvedValue({ ok: true });
     const user = userEvent.setup();
@@ -137,24 +171,25 @@ describe("HistoryClient", () => {
       record("abc", "morning", "2026-05-20T03:00:00Z"),
     ];
 
-    render(<HistoryClient records={records} />);
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
     await user.click(screen.getByRole("button", { name: "この記録を削除" }));
 
     expect(confirmSpy).toHaveBeenCalled();
     expect(deleteRecord).toHaveBeenCalledWith("abc");
-    // 削除成功後に router.refresh() で一覧を再取得することを検証
     await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
     confirmSpy.mockRestore();
   });
 
-  it("does NOT call deleteRecord when confirm is cancelled", async () => {
+  it("confirm キャンセル時は deleteRecord を呼ばない", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     const user = userEvent.setup();
     const records: RecordRow[] = [
       record("abc", "morning", "2026-05-20T03:00:00Z"),
     ];
 
-    render(<HistoryClient records={records} />);
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
     await user.click(screen.getByRole("button", { name: "この記録を削除" }));
 
     expect(confirmSpy).toHaveBeenCalled();

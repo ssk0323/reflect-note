@@ -1,35 +1,83 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { definedFlows, type Flow, type FlowType } from "@/lib/flows";
+import type { FlowType } from "@/lib/flows";
+import { formatJstMonth, groupRecordsByDate } from "@/lib/records/group";
 import {
-  formatDate,
-  formatDateTime,
-  groupRecordsByDate,
-} from "@/lib/records/group";
+  countByDate,
+  countByType,
+  longestConsecutiveDays,
+  typesByDate,
+  type TypeCounts,
+} from "@/lib/records/historyAggregates";
 import type { RecordRow } from "@/lib/records/types";
-import { deleteRecord } from "./actions";
+import { HistoryRecordCard } from "./HistoryRecordCard";
+import { MonthCalendar, CalendarLegend } from "./MonthCalendar";
+import { YearHeatmap, HeatmapLegend } from "./YearHeatmap";
 
 type Props = {
+  /** 表示する年の全レコード (新しい順) */
   records: RecordRow[];
+  /** 表示中の年 (URL ?year= で指定) */
+  year: number;
+  /** 今日の JST 日付 (YYYY-MM-DD) と JST 年 */
+  todayDate: string;
+  todayYear: number;
 };
 
 type Filter = "all" | FlowType;
+type ViewMode = "calendar" | "list";
 
-const FILTER_OPTIONS: { value: Filter; label: string }[] = [
-  { value: "all", label: "すべて" },
-  { value: "morning", label: "朝" },
-  { value: "night", label: "夜" },
-  { value: "weeklyGoal", label: "週目標" },
-  { value: "weeklyReview", label: "週振り返り" },
-  { value: "monthlyGoal", label: "月目標" },
-  { value: "monthlyReview", label: "月振り返り" },
+function useIsMobile(): boolean {
+  return useSyncExternalStore(
+    (callback) => {
+      const mql = window.matchMedia("(max-width: 768px)");
+      mql.addEventListener("change", callback);
+      return () => mql.removeEventListener("change", callback);
+    },
+    () => window.matchMedia("(max-width: 768px)").matches,
+    () => false, // SSR fallback: PC レイアウト相当
+  );
+}
+
+const FILTER_OPTIONS: { value: Filter; label: string; key: keyof TypeCounts }[] = [
+  { value: "all", label: "すべて", key: "all" },
+  { value: "morning", label: "朝", key: "morning" },
+  { value: "night", label: "夜", key: "night" },
+  { value: "weeklyGoal", label: "週目標", key: "weeklyGoal" },
+  { value: "weeklyReview", label: "週振返", key: "weeklyReview" },
+  { value: "monthlyGoal", label: "月目標", key: "monthlyGoal" },
+  { value: "monthlyReview", label: "月振返", key: "monthlyReview" },
 ];
 
-export function HistoryClient({ records }: Props) {
+export function HistoryClient({ records, year, todayDate, todayYear }: Props) {
+  const counts = useMemo(() => countByType(records), [records]);
+  const dateCounts = useMemo(() => countByDate(records), [records]);
+  const dateTypes = useMemo(() => typesByDate(records), [records]);
+  const longest = useMemo(
+    () => longestConsecutiveDays(dateCounts.keys()),
+    [dateCounts],
+  );
+
   const [filter, setFilter] = useState<Filter>("all");
+  // Web では Calendar、Mobile では List をデフォルト。
+  // useSyncExternalStore で viewport の状態を購読する (SSR は false 固定で
+  // hydration mismatch を避ける)。ユーザーがトグルしたら explicitView に
+  // 保存し、その後は viewport の変化を無視する。
+  const isMobile = useIsMobile();
+  const [explicitView, setExplicitView] = useState<ViewMode | null>(null);
+  const view: ViewMode = explicitView ?? (isMobile ? "list" : "calendar");
+  const setView = setExplicitView;
+
+  // Calendar ビュー: 表示中の月 (1-12)。今年なら今月、過去/未来年なら 1 月。
+  const initialMonth = year === todayYear ? Number(todayDate.split("-")[1]) : 1;
+  const [calendarMonth, setCalendarMonth] = useState<number>(initialMonth);
+
+  // Calendar ビュー: 選択中の日付。今年なら今日、それ以外は null。
+  const [selectedDate, setSelectedDate] = useState<string | null>(
+    year === todayYear ? todayDate : null,
+  );
 
   const filteredRecords = useMemo(
     () =>
@@ -42,72 +90,126 @@ export function HistoryClient({ records }: Props) {
     [filteredRecords],
   );
 
+  const selectedDayRecords = useMemo(() => {
+    if (!selectedDate) return [];
+    const group = groups.find((g) => g.dateKey === selectedDate);
+    return group?.records ?? [];
+  }, [groups, selectedDate]);
+
   return (
-    <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
+    <main className="mx-auto min-h-screen w-full max-w-6xl px-5 py-8 sm:px-7 sm:py-12">
       <nav aria-label="ページ移動" className="mb-4">
         <Link
           href="/"
-          className="inline-flex items-center gap-1 text-sm font-semibold text-zinc-500 transition hover:text-zinc-900 dark:hover:text-zinc-300"
+          className="sk-mono inline-flex items-center gap-1 hover:text-[var(--color-ink)]"
         >
           <span aria-hidden>←</span> ホームへ戻る
         </Link>
       </nav>
 
-      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <header
+        className="mb-6 flex flex-wrap items-end justify-between gap-3 pb-4"
+        style={{ borderBottom: "1px dashed var(--color-line)" }}
+      >
         <div>
-          <p className="text-sm font-semibold text-zinc-500">過去の記録</p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-            これまでに書いたもの
-          </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            記録は新しい順に並びます。
+          <p className="sk-eyebrow">これまでの記録</p>
+          <h1 className="sk-h-lg mt-1">{year}年の足跡</h1>
+          <p className="sk-mono mt-1">
+            記録 {counts.all}件 · 朝 {counts.morning} / 夜 {counts.night} / 週{" "}
+            {counts.weeklyGoal + counts.weeklyReview} / 月{" "}
+            {counts.monthlyGoal + counts.monthlyReview}
           </p>
         </div>
-        <FilterTabs current={filter} onChange={setFilter} />
+        <YearNav current={year} todayYear={todayYear} />
       </header>
 
-      {filteredRecords.length === 0 ? (
-        <EmptyState filter={filter} />
-      ) : (
-        <div className="space-y-8">
-          {groups.map((group) => (
-            <section
-              key={group.dateKey}
-              aria-label={formatDate(group.records[0].created_at)}
-            >
-              <h2 className="mb-3 text-sm font-bold text-zinc-500">
-                {formatDate(group.records[0].created_at)}
-              </h2>
-              <div className="grid gap-4 md:grid-cols-2">
-                {group.records.map((record) => (
-                  <RecordCard key={record.id} record={record} />
-                ))}
-              </div>
-            </section>
-          ))}
+      {/* 年間ヒートマップ */}
+      <section
+        aria-label="年間ヒートマップ"
+        className="sk-card sk-card-ghost mb-6"
+        style={{ padding: 18 }}
+      >
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
+          <span className="sk-eyebrow">年間ヒートマップ</span>
+          <HeatmapLegend />
         </div>
+        <YearHeatmap year={year} countsByDate={dateCounts} />
+        <div className="mt-2 flex flex-wrap items-baseline justify-between gap-3">
+          <span className="sk-mono">1月 ─ 12月（左→右で経過）</span>
+          <span className="sk-mono">最長連続 {longest}日</span>
+        </div>
+      </section>
+
+      {/* フィルタ + ビュー切替 */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <FilterChips counts={counts} current={filter} onChange={setFilter} />
+        <ViewToggle current={view} onChange={setView} />
+      </div>
+
+      {counts.all === 0 ? (
+        <EmptyState filter={filter} />
+      ) : view === "calendar" ? (
+        <CalendarView
+          year={year}
+          month={calendarMonth}
+          onChangeMonth={setCalendarMonth}
+          selectedDate={selectedDate}
+          onSelectDate={setSelectedDate}
+          typesByDate={dateTypes}
+          selectedDayRecords={selectedDayRecords.filter((r) =>
+            filter === "all" ? true : r.type === filter,
+          )}
+          todayDate={todayDate}
+        />
+      ) : (
+        <ListView groups={groups} filter={filter} />
       )}
     </main>
   );
 }
 
-function FilterTabs({
+function YearNav({ current, todayYear }: { current: number; todayYear: number }) {
+  // 翌年の chip は今年より未来の年に対しては表示するが、データはない想定なので
+  // "今年" の chip を中央に置き、前後 1 年を移動できるようにする。
+  const prev = current - 1;
+  const next = current + 1;
+  return (
+    <nav aria-label="年切替" className="flex flex-wrap items-center gap-1.5">
+      <Link href={`/history?year=${prev}`} className="sk-chip">
+        ‹ {prev}
+      </Link>
+      <span
+        className="sk-chip sk-chip-ink"
+        aria-current="page"
+      >
+        {current}
+      </span>
+      {next <= todayYear + 1 && (
+        <Link href={`/history?year=${next}`} className="sk-chip">
+          {next} ›
+        </Link>
+      )}
+    </nav>
+  );
+}
+
+function FilterChips({
+  counts,
   current,
   onChange,
 }: {
+  counts: TypeCounts;
   current: Filter;
   onChange: (next: Filter) => void;
 }) {
-  // ARIA tabs パターンは roving tabIndex / 矢印キー操作 / aria-controls
-  // 等の実装が必要で、現状は提供できないため、シンプルなトグルボタン
-  // セット (aria-pressed) で表現する。
   return (
     <div
       role="group"
       aria-label="種別フィルタ"
-      className="flex flex-wrap gap-1 rounded-2xl border border-zinc-200 bg-white p-1 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+      className="flex flex-wrap gap-1.5"
     >
       {FILTER_OPTIONS.map((opt) => {
+        const count = counts[opt.key];
         const isActive = current === opt.value;
         return (
           <button
@@ -115,13 +217,9 @@ function FilterTabs({
             type="button"
             aria-pressed={isActive}
             onClick={() => onChange(opt.value)}
-            className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
-              isActive
-                ? "bg-zinc-900 text-white dark:bg-zinc-50 dark:text-zinc-900"
-                : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-900"
-            }`}
+            className={`sk-chip ${isActive ? "sk-chip-ink" : ""}`}
           >
-            {opt.label}
+            {opt.label} {count}
           </button>
         );
       })}
@@ -129,161 +227,211 @@ function FilterTabs({
   );
 }
 
-function EmptyState({ filter }: { filter: Filter }) {
-  if (filter === "all") {
-    return (
-      <div className="rounded-3xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          まだ記録がありません。トップから朝のセットアップを始めましょう。
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="rounded-3xl border border-dashed border-zinc-300 bg-white p-10 text-center dark:border-zinc-800 dark:bg-zinc-950">
-      <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-        この種別の記録はまだありません。
-      </p>
-    </div>
-  );
-}
-
-function RecordCard({ record }: { record: RecordRow }) {
-  const flow = definedFlows[record.type];
-  const firstAnswer = useMemo(() => {
-    for (const q of flow.questions) {
-      if (q.kind === "group") {
-        for (const field of q.fields) {
-          const v = record.answers[field.key]?.trim();
-          if (v) return v;
-        }
-      } else {
-        const v = record.answers[q.key]?.trim();
-        if (v) return v;
-      }
-    }
-    return "未入力の記録です";
-  }, [flow, record]);
-
-  return (
-    <article className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <span className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-            {flow.shortLabel}
-          </span>
-          <h3 className="mt-3 text-lg font-bold text-zinc-900 dark:text-zinc-50">
-            {flow.label}
-          </h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            {formatDateTime(record.created_at)}
-          </p>
-        </div>
-      </div>
-
-      <p className="mt-4 line-clamp-3 min-h-[4.5rem] whitespace-pre-wrap text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-        {firstAnswer}
-      </p>
-
-      <details className="mt-4 rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-900">
-        <summary className="cursor-pointer text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          内容を見る
-        </summary>
-        <div className="mt-4 space-y-3">
-          <RecordAnswers flow={flow} answers={record.answers} />
-        </div>
-      </details>
-
-      <div className="mt-4 flex gap-2">
-        <Link
-          href={`/flows/${record.type}?edit=${record.id}`}
-          className="flex-1 rounded-2xl bg-zinc-900 px-4 py-3 text-center text-sm font-semibold text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          編集する
-        </Link>
-        <DeleteButton recordId={record.id} />
-      </div>
-    </article>
-  );
-}
-
-function DeleteButton({ recordId }: { recordId: string }) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-
-  function handleClick() {
-    if (!window.confirm("この記録を削除しますか？")) return;
-    setError(null);
-    startTransition(async () => {
-      try {
-        const result = await deleteRecord(recordId);
-        if (result.ok) {
-          router.refresh();
-        } else {
-          setError(result.error ?? "削除に失敗しました");
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "削除に失敗しました");
-      }
-    });
-  }
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={isPending}
-        aria-label="この記録を削除"
-        className="rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-600 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
-      >
-        {isPending ? "削除中..." : "削除"}
-      </button>
-      {error && (
-        <p role="alert" className="text-xs text-red-600">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function RecordAnswers({
-  flow,
-  answers,
+function ViewToggle({
+  current,
+  onChange,
 }: {
-  flow: Flow;
-  answers: RecordRow["answers"];
+  current: ViewMode;
+  onChange: (next: ViewMode) => void;
 }) {
   return (
-    <>
-      {flow.questions.map((q) => (
-        <div key={q.key}>
-          <p className="text-xs font-semibold text-zinc-500">{q.title}</p>
-          {q.kind === "group" ? (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {q.fields.map((field) => (
-                <div
-                  key={field.key}
-                  className="rounded-xl bg-white p-3 dark:bg-zinc-950"
-                >
-                  <p className="text-xs font-bold text-zinc-500">
-                    {field.label}
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-900 dark:text-zinc-100">
-                    {answers[field.key]?.trim() || "未入力"}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-900 dark:text-zinc-100">
-              {answers[q.key]?.trim() || "未入力"}
-            </p>
-          )}
-        </div>
-      ))}
-    </>
+    <div role="group" aria-label="ビュー切替" className="flex gap-1.5">
+      <button
+        type="button"
+        onClick={() => onChange("calendar")}
+        aria-pressed={current === "calendar"}
+        className={`sk-btn ${current === "calendar" ? "sk-btn-ink" : "sk-btn-ghost"}`}
+        style={{ fontSize: 13, padding: "6px 12px" }}
+      >
+        📅 カレンダー
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("list")}
+        aria-pressed={current === "list"}
+        className={`sk-btn ${current === "list" ? "sk-btn-ink" : "sk-btn-ghost"}`}
+        style={{ fontSize: 13, padding: "6px 12px" }}
+      >
+        📜 リスト
+      </button>
+    </div>
   );
+}
+
+function CalendarView({
+  year,
+  month,
+  onChangeMonth,
+  selectedDate,
+  onSelectDate,
+  typesByDate,
+  selectedDayRecords,
+  todayDate,
+}: {
+  year: number;
+  month: number;
+  onChangeMonth: (next: number) => void;
+  selectedDate: string | null;
+  onSelectDate: (date: string) => void;
+  typesByDate: Map<string, Set<FlowType>>;
+  selectedDayRecords: RecordRow[];
+  todayDate: string;
+}) {
+  const monthLabel = formatJstMonth(
+    new Date(Date.UTC(year, month - 1, 1) - 9 * 60 * 60 * 1000),
+  );
+
+  function changeMonth(delta: number) {
+    const next = month + delta;
+    if (next < 1 || next > 12) return; // 年またぎは year nav で
+    onChangeMonth(next);
+  }
+
+  return (
+    <div
+      role="region"
+      aria-label="カレンダービュー"
+      className="grid gap-6 lg:grid-cols-[1fr_360px]"
+    >
+      <section
+        aria-label="月カレンダー"
+        className="sk-card sk-card-ghost"
+        style={{ padding: 20 }}
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <span className="sk-eyebrow">{monthLabel}</span>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={() => changeMonth(-1)}
+              disabled={month === 1}
+              className="sk-chip disabled:opacity-40"
+            >
+              ‹ {month === 1 ? "12月" : `${month - 1}月`}
+            </button>
+            <button
+              type="button"
+              onClick={() => changeMonth(1)}
+              disabled={month === 12}
+              className="sk-chip disabled:opacity-40"
+            >
+              {month === 12 ? "1月" : `${month + 1}月`} ›
+            </button>
+          </div>
+        </div>
+        <MonthCalendar
+          year={year}
+          month={month}
+          selectedDate={selectedDate}
+          typesByDate={typesByDate}
+          todayDate={todayDate}
+          onSelectDate={onSelectDate}
+        />
+        <div className="mt-3">
+          <CalendarLegend />
+        </div>
+      </section>
+
+      <section aria-label="選択日の記録">
+        <div className="mb-3 flex items-baseline justify-between gap-2">
+          <div>
+            <p className="sk-eyebrow">選択中の日</p>
+            <h2 className="sk-h mt-1" style={{ fontSize: 20 }}>
+              {selectedDate ? formatSelectedDate(selectedDate) : "日付を選んでください"}
+            </h2>
+          </div>
+        </div>
+
+        {selectedDate && selectedDayRecords.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {selectedDayRecords.map((record) => (
+              <HistoryRecordCard key={record.id} record={record} />
+            ))}
+          </div>
+        ) : (
+          <div
+            className="sk-card sk-card-dashed"
+            style={{ padding: 14, textAlign: "center" }}
+          >
+            <span className="sk-eyebrow">
+              {selectedDate
+                ? "この日の記録はまだありません"
+                : "左のカレンダーから日付を選んでください"}
+            </span>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ListView({
+  groups,
+  filter,
+}: {
+  groups: ReturnType<typeof groupRecordsByDate>;
+  filter: Filter;
+}) {
+  if (groups.length === 0) {
+    return <EmptyState filter={filter} />;
+  }
+  return (
+    <div className="space-y-6">
+      {groups.map((group) => (
+        <section key={group.dateKey} aria-label={formatGroupHeader(group.dateKey)}>
+          <div className="mb-2 flex items-baseline justify-between">
+            <p className="sk-eyebrow">{formatGroupHeader(group.dateKey)}</p>
+            <span className="sk-mono">{group.records.length}件</span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {group.records.map((record) => (
+              <HistoryRecordCard key={record.id} record={record} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ filter }: { filter: Filter }) {
+  return (
+    <div
+      className="sk-card sk-card-dashed"
+      style={{ padding: 40, textAlign: "center" }}
+    >
+      <p className="text-sm leading-6" style={{ color: "var(--color-ink-2)" }}>
+        {filter === "all"
+          ? "まだ記録がありません。ホームから朝のセットアップを始めましょう。"
+          : "この種別の記録はまだありません。"}
+      </p>
+    </div>
+  );
+}
+
+function formatSelectedDate(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const fmt = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+  // toJstDateString は時刻を考慮するが、日付のみの dateKey なら UTC で問題ない。
+  return fmt.format(date);
+}
+
+function formatGroupHeader(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const fmt = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+  return fmt.format(date);
 }

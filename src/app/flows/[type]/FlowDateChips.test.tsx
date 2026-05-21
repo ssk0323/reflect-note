@@ -12,9 +12,9 @@ describe("FlowDateChips", () => {
     );
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(3);
-    expect(radios[0].textContent).toContain("今日");
-    expect(radios[1].textContent).toContain("明日");
-    expect(radios[2].textContent).toContain("明明日");
+    expect(radios[0]).toHaveAccessibleName(/今日/);
+    expect(radios[1]).toHaveAccessibleName(/明日/);
+    expect(radios[2]).toHaveAccessibleName(/明明日/);
   });
 
   it("night フローでは「今日 / 昨日 / 一昨日」のチップを 3 つ出す", () => {
@@ -22,18 +22,18 @@ describe("FlowDateChips", () => {
       <FlowDateChips type="night" value="2026-05-21" onChange={() => {}} now={may21noon} />,
     );
     const radios = screen.getAllByRole("radio");
-    expect(radios[0].textContent).toContain("今日");
-    expect(radios[1].textContent).toContain("昨日");
-    expect(radios[2].textContent).toContain("一昨日");
+    expect(radios[0]).toHaveAccessibleName(/今日/);
+    expect(radios[1]).toHaveAccessibleName(/昨日/);
+    expect(radios[2]).toHaveAccessibleName(/一昨日/);
   });
 
-  it("選択中のチップは aria-checked=true", () => {
+  it("選択中のチップは checked になる", () => {
     render(
       <FlowDateChips type="morning" value="2026-05-22" onChange={() => {}} now={may21noon} />,
     );
     const [today, tomorrow] = screen.getAllByRole("radio");
-    expect(today).toHaveAttribute("aria-checked", "false");
-    expect(tomorrow).toHaveAttribute("aria-checked", "true");
+    expect(today).not.toBeChecked();
+    expect(tomorrow).toBeChecked();
   });
 
   it("チップクリックで onChange が呼ばれる", async () => {

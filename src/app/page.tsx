@@ -51,20 +51,28 @@ const MONTHLY_GOAL_CHECKABLES: CheckableField[] = [
   { key: "monthPriority3", kind: "task", label: "重点タスク 3" },
 ];
 
-// recentRecords (created_at desc) から、指定 type かつ指定期間内の最新 1 件を返す。
-// 期間判定は target_date (あれば) → created_at の JST 日付 (Issue #30) で行う。
+// recentRecords から、指定 type かつ指定期間内で「最新に書かれた (created_at 最大)」
+// 1 件を返す。期間判定は target_date (あれば) → created_at の JST 日付 (Issue #30) で行う。
+// records の並び順には依存しない (fetchRecentRecords の order が変わっても安定)。
 function pickLatestInBoundsByDateRange(
   records: RecordRow[],
   type: Flow["type"],
   startDate: string, // YYYY-MM-DD (inclusive)
   endDateExclusive: string, // YYYY-MM-DD (exclusive)
 ): RecordRow | null {
+  let latest: RecordRow | null = null;
+  let latestCreatedMs = -Infinity;
   for (const r of records) {
     if (r.type !== type) continue;
     const key = resolveRecordDate(r);
-    if (key >= startDate && key < endDateExclusive) return r;
+    if (key < startDate || key >= endDateExclusive) continue;
+    const createdMs = Date.parse(r.created_at);
+    if (createdMs > latestCreatedMs) {
+      latest = r;
+      latestCreatedMs = createdMs;
+    }
   }
-  return null;
+  return latest;
 }
 
 async function fetchRecentRecords(
@@ -77,6 +85,10 @@ async function fetchRecentRecords(
   // これにより、例えば monthlyGoal "再来月" を 2 ヶ月前に書いた場合でも、
   // 今月になったタイミングで target_date が一致して Home に表示される
   // (created_at のみのフィルタだと 35 日 lookback の外に落ちる)。
+  //
+  // 並び順は target_date desc (NULL は最後) → created_at desc。
+  // limit(1000) に当たったときに、created_at が古いが target_date が現在/未来の
+  // レコードが押し出されないようにするため (Issue #30, PR #31 review より)。
   const { data, error } = await supabase
     .from("records")
     .select("id, type, answers, checks, target_date, created_at, updated_at")
@@ -84,8 +96,9 @@ async function fetchRecentRecords(
       `target_date.gte.${lookbackDate},` +
         `and(target_date.is.null,created_at.gte.${lookbackStartUtc})`,
     )
+    .order("target_date", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
-    .limit(1000); // PostgREST デフォルト上限 (1000) での silent truncation を明示
+    .limit(1000);
 
   if (error) {
     console.error("Failed to fetch recent records", error);

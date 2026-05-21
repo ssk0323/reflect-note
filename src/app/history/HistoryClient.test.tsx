@@ -37,6 +37,12 @@ describe("HistoryClient", () => {
     refresh.mockReset();
   });
 
+  it("renders a back-to-home link", () => {
+    render(<HistoryClient records={[]} />);
+    const link = screen.getByRole("link", { name: /ホームへ戻る/ });
+    expect(link).toHaveAttribute("href", "/");
+  });
+
   it("shows an empty state when there are no records", () => {
     render(<HistoryClient records={[]} />);
     expect(screen.getByText(/まだ記録がありません/)).toBeInTheDocument();

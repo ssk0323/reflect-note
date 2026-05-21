@@ -52,3 +52,6 @@ next-env.d.ts
 
 # Claude Code local settings (per-user overrides)
 .claude/settings.local.json
+
+# Supabase CLI が生成する一時ファイル
+supabase/.temp/

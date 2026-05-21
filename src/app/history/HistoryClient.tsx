@@ -44,6 +44,15 @@ export function HistoryClient({ records }: Props) {
 
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
+      <nav aria-label="ページ移動" className="mb-4">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1 text-sm font-semibold text-zinc-500 transition hover:text-zinc-900 dark:hover:text-zinc-300"
+        >
+          <span aria-hidden>←</span> ホームへ戻る
+        </Link>
+      </nav>
+
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm font-semibold text-zinc-500">過去の記録</p>

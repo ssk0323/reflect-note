@@ -20,17 +20,21 @@ export type Achievement = {
   description: string;
 };
 
-function withinBoundsByResolvedDate(
+/** bounds の start/end を JST 日付文字列に変換しておき、レコードごとの再計算を避ける。 */
+function toJstDateRange(bounds: BoundsUtc): { start: string; end: string } {
+  return {
+    start: toJstDateString(new Date(bounds.start)),
+    end: toJstDateString(new Date(bounds.end)),
+  };
+}
+
+function withinRange(
   record: RecordRow,
-  bounds: BoundsUtc,
+  range: { start: string; end: string },
 ): boolean {
   // target_date があれば「いつのための記録か」を優先 (Issue #30)。
-  // bounds は UTC ISO だが、record 側を JST 日付文字列化して文字列比較する方が
-  // タイムゾーン誤差なく正確に判定できる。
   const recordDate = resolveRecordDate(record);
-  const startDate = toJstDateString(new Date(bounds.start));
-  const endDate = toJstDateString(new Date(bounds.end));
-  return recordDate >= startDate && recordDate < endDate;
+  return recordDate >= range.start && recordDate < range.end;
 }
 
 /**
@@ -46,15 +50,12 @@ export function computeAchievements(
 ): Achievement[] {
   const result: Achievement[] = [];
 
-  const weekBounds = getJstWeekBoundsUtc(now);
-  const monthBounds = getJstMonthBoundsUtc(now);
+  // bounds を JST 日付文字列に 1 度だけ変換する (records 件数分の再計算を避ける)。
+  const weekRange = toJstDateRange(getJstWeekBoundsUtc(now));
+  const monthRange = toJstDateRange(getJstMonthBoundsUtc(now));
 
-  const weekRecords = records.filter((r) =>
-    withinBoundsByResolvedDate(r, weekBounds),
-  );
-  const monthRecords = records.filter((r) =>
-    withinBoundsByResolvedDate(r, monthBounds),
-  );
+  const weekRecords = records.filter((r) => withinRange(r, weekRange));
+  const monthRecords = records.filter((r) => withinRange(r, monthRange));
 
   if (
     weekRecords.some((r) => r.type === "weeklyGoal") &&

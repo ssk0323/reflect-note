@@ -3,6 +3,7 @@
 import { useId } from "react";
 import type { FlowType } from "@/lib/flows";
 import {
+  dateInputBoundsForFlow,
   defaultDateOptions,
   flowDirection,
   isAllowedDirection,
@@ -30,9 +31,10 @@ export function FlowDateChips({ type, value, onChange, now }: Props) {
   const headline = direction === "future" ? "いつの分を書きますか？" : "いつの振り返りですか？";
   const groupName = useId();
 
-  const todayValue = options[0].value;
-  const minDate = direction === "future" ? todayValue : undefined;
-  const maxDate = direction === "past" ? todayValue : undefined;
+  // date input の min/max は「期間の開始 / 終了」で day レベルに表現する。
+  // 例: weeklyReview で options[0].value (= 今週月曜) を max にすると当週火曜以降を
+  // 選べなくなるため、専用ヘルパー (期間終了日を返す) で計算する。
+  const { min: minDate, max: maxDate } = dateInputBoundsForFlow(type, now ?? new Date());
 
   // value が options に含まれていない場合は「その他」扱い
   const isPredefined = options.some((o) => o.value === value);

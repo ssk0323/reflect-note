@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   addDays,
   addMonths,
+  dateInputBoundsForFlow,
   defaultDateOptions,
   diffDays,
   flowDirection,
@@ -38,6 +39,15 @@ describe("targetDate / 日付変換", () => {
     expect(isValidDateString("2026-5-21")).toBe(false);
     expect(isValidDateString("2026/05/21")).toBe(false);
     expect(isValidDateString(123)).toBe(false);
+  });
+
+  it("isValidDateString は暦的に不正な日付を弾く (2/30 や 13月)", () => {
+    expect(isValidDateString("2026-02-30")).toBe(false);
+    expect(isValidDateString("2026-02-29")).toBe(false); // 2026 は閏年でない
+    expect(isValidDateString("2024-02-29")).toBe(true); // 2024 は閏年
+    expect(isValidDateString("2026-13-01")).toBe(false);
+    expect(isValidDateString("2026-00-01")).toBe(false);
+    expect(isValidDateString("2026-04-31")).toBe(false); // 4月は30日まで
   });
 
   it("addDays / diffDays は対称的", () => {
@@ -230,6 +240,47 @@ describe("targetDate / 月またぎ・年またぎのエッジケース", () => 
     const opts = defaultDateOptions("weeklyGoal", may24noon);
     // 5/24 (日) の今週は 5/18-5/24
     expect(opts[0].value).toBe("2026-05-18");
+  });
+});
+
+describe("targetDate / dateInputBoundsForFlow", () => {
+  // 木曜 2026-05-21 基準: 今週は 5/18(月)〜5/24(日)、今月は 5/1〜5/31
+  it("morning は min=今日 のみ", () => {
+    expect(dateInputBoundsForFlow("morning", may21noon)).toEqual({
+      min: "2026-05-21",
+    });
+  });
+
+  it("night は max=今日 のみ", () => {
+    expect(dateInputBoundsForFlow("night", may21noon)).toEqual({
+      max: "2026-05-21",
+    });
+  });
+
+  it("weeklyGoal は min=今週月曜 のみ", () => {
+    expect(dateInputBoundsForFlow("weeklyGoal", may21noon)).toEqual({
+      min: "2026-05-18",
+    });
+  });
+
+  it("weeklyReview は max=今週日曜 (期間終了)", () => {
+    // PR #31 で報告されたバグ: 以前は max=月曜になって火曜以降を選べなかった
+    expect(dateInputBoundsForFlow("weeklyReview", may21noon)).toEqual({
+      max: "2026-05-24",
+    });
+  });
+
+  it("monthlyGoal は min=今月1日 のみ", () => {
+    expect(dateInputBoundsForFlow("monthlyGoal", may21noon)).toEqual({
+      min: "2026-05-01",
+    });
+  });
+
+  it("monthlyReview は max=今月末 (期間終了)", () => {
+    // PR #31 で報告されたバグ: 以前は max=1日になって 2 日以降を選べなかった
+    expect(dateInputBoundsForFlow("monthlyReview", may21noon)).toEqual({
+      max: "2026-05-31",
+    });
   });
 });
 

@@ -14,8 +14,15 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 /** "YYYY-MM-DD" 形式の JST 日付文字列バリデーション。 */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** "YYYY-MM-DD" 形式かつ暦的にも実在する日付か検証する。
+ *  形式だけだと `2026-02-30` のような不正日付が通り、DB の date cast で失敗するため
+ *  parse → format の往復一致でカレンダー妥当性も確認する。 */
 export function isValidDateString(s: unknown): s is string {
-  return typeof s === "string" && DATE_RE.test(s);
+  if (typeof s !== "string" || !DATE_RE.test(s)) return false;
+  // Date.UTC は m=13 や d=32 を自動補正するので、往復後に同じ文字列に戻れば実在日付。
+  const [y, m, d] = s.split("-").map(Number);
+  const round = toJstDateString(new Date(Date.UTC(y, m - 1, d) - JST_OFFSET_MS));
+  return round === s;
 }
 
 /** Date を JST の YYYY-MM-DD 形式に変換する。 */
@@ -252,4 +259,34 @@ export function resolveRecordDate(record: {
   created_at: string;
 }): string {
   return record.target_date ?? toJstDateString(new Date(record.created_at));
+}
+
+/** ネイティブ date input の min/max を返す。
+ *
+ *  フローの方向 (future/past) と粒度 (day/week/month) に応じて、
+ *  「normalize 後に isAllowedDirection を通る範囲」を day レベルで表現する。
+ *
+ *  - future (morning/weeklyGoal/monthlyGoal): min = 今の期間開始 (今日 / 今週月曜 / 今月1日)
+ *  - past   (night/weeklyReview/monthlyReview): max = 今の期間終了 (今日 / 今週日曜 / 今月末)
+ *
+ *  例: weeklyReview の max を `options[0].value` (= 今週月曜) にすると当週火曜以降が
+ *  選べなくなるため、期間終了 (日曜) を返す必要がある。 */
+export function dateInputBoundsForFlow(
+  type: FlowType,
+  now: Date = new Date(),
+): { min?: string; max?: string } {
+  const today = toJstDateString(now);
+  const direction = flowDirection(type);
+  if (type === "morning" || type === "night") {
+    return direction === "future" ? { min: today } : { max: today };
+  }
+  if (type === "weeklyGoal" || type === "weeklyReview") {
+    const monday = startOfJstWeek(today);
+    return direction === "future" ? { min: monday } : { max: addDays(monday, 6) };
+  }
+  // monthly
+  const monthStart = startOfJstMonth(today);
+  if (direction === "future") return { min: monthStart };
+  // 月末 = 翌月 1 日の前日
+  return { max: addDays(addMonths(monthStart, 1), -1) };
 }

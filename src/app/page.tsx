@@ -9,10 +9,10 @@ import {
   type BoundsUtc,
 } from "@/lib/records/period";
 import {
-  formatDateTime,
   formatJstDateWithWeekday,
   formatJstMonth,
   formatJstShortDate,
+  formatJstTime,
 } from "@/lib/records/group";
 import {
   STREAK_LOOKBACK_DAYS,
@@ -133,8 +133,10 @@ export default async function Home() {
   const weeklyGoal = pickLatestInBounds(recentRecords, "weeklyGoal", weekBounds);
   const monthlyGoal = pickLatestInBounds(recentRecords, "monthlyGoal", monthBounds);
 
-  // カードの subtitle (対象期間の明示)
-  // - 今日: "2026年5月21日 (木)" + 記録あれば "/ 5/21 07:30 入力"
+  // カードの subtitle (対象期間の明示)。
+  // Issue #23 の要件「記録が未入力のカードはタイトルのみ」に従い、
+  // record が無いカードには subtitle を渡さない (undefined)。
+  // - 今日: "2026年5月21日 (木) / 07:30 入力"
   // - 今週: "5/19 〜 5/25" (月曜始まり、日曜終わり)
   // - 今月: "2026年5月"
   const weekStartDate = new Date(weekBounds.start);
@@ -142,10 +144,12 @@ export default async function Home() {
     weekStartDate.getTime() + 6 * 24 * 60 * 60 * 1000,
   );
   const todaySubtitle = today
-    ? `${formatJstDateWithWeekday(dayBounds.start)} / ${formatDateTime(today.created_at)} 入力`
-    : formatJstDateWithWeekday(dayBounds.start);
-  const weekSubtitle = `${formatJstShortDate(weekStartDate)} 〜 ${formatJstShortDate(weekSundayDate)}`;
-  const monthSubtitle = formatJstMonth(monthBounds.start);
+    ? `${formatJstDateWithWeekday(dayBounds.start)} / ${formatJstTime(today.created_at)} 入力`
+    : undefined;
+  const weekSubtitle = weeklyGoal
+    ? `${formatJstShortDate(weekStartDate)} 〜 ${formatJstShortDate(weekSundayDate)}`
+    : undefined;
+  const monthSubtitle = monthlyGoal ? formatJstMonth(monthBounds.start) : undefined;
 
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">

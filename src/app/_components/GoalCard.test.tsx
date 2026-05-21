@@ -131,8 +131,16 @@ describe("GoalCard", () => {
     expect(link).toHaveTextContent("編集");
   });
 
-  it("does NOT show the edit button when there is no record", () => {
-    render(<GoalCard {...baseProps} record={null} />);
+  it("does NOT show the edit button when record is null, even if editHref is provided", () => {
+    // editHref を渡しても、record が null なら編集ボタンは出ないことを検証
+    // (将来「未記録のカードでも編集 UI を出す」 regression を防ぐ)
+    render(
+      <GoalCard
+        {...baseProps}
+        record={null}
+        editHref="/flows/morning?edit=rec-1"
+      />,
+    );
     expect(
       screen.queryByRole("link", { name: /編集する/ }),
     ).not.toBeInTheDocument();

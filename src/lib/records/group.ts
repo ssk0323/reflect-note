@@ -107,3 +107,16 @@ export function formatJstDateWithWeekday(input: string | Date): string {
     input instanceof Date ? input : new Date(input),
   );
 }
+
+const timeFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** "07:30" のように時刻のみを返す (日付重複を避けたいときに使う)。 */
+export function formatJstTime(input: string | Date): string {
+  return timeFormatter.format(
+    input instanceof Date ? input : new Date(input),
+  );
+}

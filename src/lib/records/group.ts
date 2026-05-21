@@ -65,3 +65,58 @@ const dateTimeFormatter = new Intl.DateTimeFormat("ja-JP", {
 export function formatDateTime(isoDateTime: string): string {
   return dateTimeFormatter.format(new Date(isoDateTime));
 }
+
+const monthFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: TIME_ZONE,
+  year: "numeric",
+  month: "long",
+});
+
+/** "2026年5月" のように年月を返す。 */
+export function formatJstMonth(input: string | Date): string {
+  return monthFormatter.format(
+    input instanceof Date ? input : new Date(input),
+  );
+}
+
+const shortDateFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: TIME_ZONE,
+  month: "numeric",
+  day: "numeric",
+});
+
+/** "5/21" のように月/日を返す。 */
+export function formatJstShortDate(input: string | Date): string {
+  return shortDateFormatter.format(
+    input instanceof Date ? input : new Date(input),
+  );
+}
+
+const dateWithWeekdayFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: TIME_ZONE,
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  weekday: "short",
+});
+
+/** "2026年5月21日(木)" のように曜日付きフルデートを返す。formatDate と同じだが
+ *  別名で意図を明示できる。 */
+export function formatJstDateWithWeekday(input: string | Date): string {
+  return dateWithWeekdayFormatter.format(
+    input instanceof Date ? input : new Date(input),
+  );
+}
+
+const timeFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: TIME_ZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** "07:30" のように時刻のみを返す (日付重複を避けたいときに使う)。 */
+export function formatJstTime(input: string | Date): string {
+  return timeFormatter.format(
+    input instanceof Date ? input : new Date(input),
+  );
+}

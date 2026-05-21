@@ -14,6 +14,8 @@ export type CheckableField = {
 type Props = {
   title: string;
   emoji: string;
+  // タイトルの下に表示する補助情報 (例: 期間や入力日時)
+  subtitle?: string;
   // 記録があれば渡す。なければ未設定状態を表示
   record: RecordRow | null;
   // チェック対象のフィールド。goal と task が混在して渡されるが、
@@ -37,6 +39,7 @@ type VisibleItem = {
 export function GoalCard({
   title,
   emoji,
+  subtitle,
   record,
   checkableFields,
   emptyMessage,
@@ -59,13 +62,31 @@ export function GoalCard({
 
   return (
     <article className="flex flex-col rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-center gap-3">
-        <span className="text-2xl" aria-hidden>
-          {emoji}
-        </span>
-        <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
-          {title}
-        </h2>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl" aria-hidden>
+              {emoji}
+            </span>
+            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
+              {title}
+            </h2>
+          </div>
+          {subtitle && (
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {subtitle}
+            </p>
+          )}
+        </div>
+        {record != null && editHref && (
+          <Link
+            href={editHref}
+            aria-label={`${title}を編集する`}
+            className="rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            <span aria-hidden>✏️ </span>編集
+          </Link>
+        )}
       </div>
 
       {record == null ? (
@@ -81,44 +102,32 @@ export function GoalCard({
           </Link>
         </div>
       ) : (
-        <>
-          <div className="mt-4 space-y-5">
-            {visibleItems.length === 0 ? (
-              <p className="rounded-2xl bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                目標とタスクが未入力です。
-              </p>
-            ) : (
-              <>
-                {goals.length > 0 && (
-                  <CheckableSection
-                    sectionLabel="目標"
-                    accentClass="bg-amber-500"
-                    items={goals}
-                    record={record}
-                  />
-                )}
-                {tasks.length > 0 && (
-                  <CheckableSection
-                    sectionLabel="タスク"
-                    accentClass="bg-sky-500"
-                    items={tasks}
-                    record={record}
-                  />
-                )}
-              </>
-            )}
-          </div>
-          {editHref && (
-            <div className="mt-4 text-right">
-              <Link
-                href={editHref}
-                className="text-xs font-semibold text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
-              >
-                編集する →
-              </Link>
-            </div>
+        <div className="mt-4 space-y-5">
+          {visibleItems.length === 0 ? (
+            <p className="rounded-2xl bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+              目標とタスクが未入力です。
+            </p>
+          ) : (
+            <>
+              {goals.length > 0 && (
+                <CheckableSection
+                  sectionLabel="目標"
+                  accentClass="bg-amber-500"
+                  items={goals}
+                  record={record}
+                />
+              )}
+              {tasks.length > 0 && (
+                <CheckableSection
+                  sectionLabel="タスク"
+                  accentClass="bg-sky-500"
+                  items={tasks}
+                  record={record}
+                />
+              )}
+            </>
           )}
-        </>
+        </div>
       )}
     </article>
   );

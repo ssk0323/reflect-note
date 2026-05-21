@@ -120,14 +120,40 @@ describe("GoalCard", () => {
     expect(screen.getByText("目標とタスクが未入力です。")).toBeInTheDocument();
   });
 
-  it("shows the edit link when editHref is provided and record exists", () => {
+  it("shows a prominent edit button (in header) when editHref is provided and record exists", () => {
     const r = record({ goal: "勉強する" });
     render(
       <GoalCard {...baseProps} record={r} editHref="/flows/morning?edit=rec-1" />,
     );
-    expect(screen.getByRole("link", { name: /編集する/ })).toHaveAttribute(
-      "href",
-      "/flows/morning?edit=rec-1",
+    // aria-label でアクセシブルなボタンとして検出できる
+    const link = screen.getByRole("link", { name: /今日の目標を編集する/ });
+    expect(link).toHaveAttribute("href", "/flows/morning?edit=rec-1");
+    expect(link).toHaveTextContent("編集");
+  });
+
+  it("does NOT show the edit button when record is null, even if editHref is provided", () => {
+    // editHref を渡しても、record が null なら編集ボタンは出ないことを検証
+    // (将来「未記録のカードでも編集 UI を出す」 regression を防ぐ)
+    render(
+      <GoalCard
+        {...baseProps}
+        record={null}
+        editHref="/flows/morning?edit=rec-1"
+      />,
     );
+    expect(
+      screen.queryByRole("link", { name: /編集する/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the subtitle when provided", () => {
+    render(
+      <GoalCard
+        {...baseProps}
+        record={null}
+        subtitle="2026年5月21日(木)"
+      />,
+    );
+    expect(screen.getByText("2026年5月21日(木)")).toBeInTheDocument();
   });
 });

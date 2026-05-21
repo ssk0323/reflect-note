@@ -9,6 +9,12 @@ import {
   type BoundsUtc,
 } from "@/lib/records/period";
 import {
+  formatJstDateWithWeekday,
+  formatJstMonth,
+  formatJstShortDate,
+  formatJstTime,
+} from "@/lib/records/group";
+import {
   STREAK_LOOKBACK_DAYS,
   computeStreak,
 } from "@/lib/records/streak";
@@ -127,6 +133,24 @@ export default async function Home() {
   const weeklyGoal = pickLatestInBounds(recentRecords, "weeklyGoal", weekBounds);
   const monthlyGoal = pickLatestInBounds(recentRecords, "monthlyGoal", monthBounds);
 
+  // カードの subtitle (対象期間の明示)。
+  // Issue #23 の要件「記録が未入力のカードはタイトルのみ」に従い、
+  // record が無いカードには subtitle を渡さない (undefined)。
+  // - 今日: "2026年5月21日 (木) / 07:30 入力"
+  // - 今週: "5/19 〜 5/25" (月曜始まり、日曜終わり)
+  // - 今月: "2026年5月"
+  const weekStartDate = new Date(weekBounds.start);
+  const weekSundayDate = new Date(
+    weekStartDate.getTime() + 6 * 24 * 60 * 60 * 1000,
+  );
+  const todaySubtitle = today
+    ? `${formatJstDateWithWeekday(dayBounds.start)} / ${formatJstTime(today.created_at)} 入力`
+    : undefined;
+  const weekSubtitle = weeklyGoal
+    ? `${formatJstShortDate(weekStartDate)} 〜 ${formatJstShortDate(weekSundayDate)}`
+    : undefined;
+  const monthSubtitle = monthlyGoal ? formatJstMonth(monthBounds.start) : undefined;
+
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
       <header className="rounded-3xl bg-zinc-900 p-6 text-white shadow-sm sm:p-8">
@@ -146,6 +170,7 @@ export default async function Home() {
         <GoalCard
           title="本日の目標"
           emoji="🌅"
+          subtitle={todaySubtitle}
           record={today}
           checkableFields={MORNING_CHECKABLES}
           emptyMessage="本日の目標はまだ設定されていません。"
@@ -155,6 +180,7 @@ export default async function Home() {
         <GoalCard
           title="今週の目標"
           emoji="🗓️"
+          subtitle={weekSubtitle}
           record={weeklyGoal}
           checkableFields={WEEKLY_GOAL_CHECKABLES}
           emptyMessage="今週の目標はまだ設定されていません。"
@@ -164,6 +190,7 @@ export default async function Home() {
         <GoalCard
           title="今月の目標"
           emoji="🎯"
+          subtitle={monthSubtitle}
           record={monthlyGoal}
           checkableFields={MONTHLY_GOAL_CHECKABLES}
           emptyMessage="今月の目標はまだ設定されていません。"

@@ -1,4 +1,5 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { toJstDateKey } from "@/lib/records/group";
 import type { RecordRow } from "@/lib/records/types";
 import { HistoryClient } from "./HistoryClient";
 
@@ -8,17 +9,10 @@ type PageProps = {
   searchParams: Promise<{ year?: string }>;
 };
 
-const TIME_ZONE = "Asia/Tokyo";
-
-const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: TIME_ZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
 function todayJstParts(): { dateKey: string; year: number } {
-  const dateKey = dateKeyFormatter.format(new Date());
+  // JST 日付キー生成は @/lib/records/group#toJstDateKey に集約済み。
+  // ここで Intl.DateTimeFormat を再定義しない (Copilot review PR #33 で指摘あり)。
+  const dateKey = toJstDateKey(new Date());
   const year = Number(dateKey.slice(0, 4));
   return { dateKey, year };
 }

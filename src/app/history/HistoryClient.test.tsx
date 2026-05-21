@@ -181,6 +181,46 @@ describe("HistoryClient", () => {
     confirmSpy.mockRestore();
   });
 
+  it("Calendar ビュー: フィルタで除外された日と本当に空の日でメッセージを区別する", async () => {
+    // Copilot review PR #33 指摘: 「この日の記録はまだありません」が
+    // フィルタ除外時にも出るのは誤解を招くので文言を分ける
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record("a", "morning", "2026-05-20T03:00:00Z"), // 5/20 に morning 1 件
+    ];
+
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    // 5/20 を選択 (デフォルトは今日 = 5/21 なので明示的にクリック)
+    await user.click(screen.getByRole("gridcell", { name: /20日/ }));
+
+    // フィルタ「夜」に絞り込み → 5/20 は morning だけなので除外される
+    await user.click(screen.getByRole("button", { name: /夜 0/ }));
+
+    expect(
+      screen.getByText(/この種別の記録はこの日にはありません/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("この日の記録はまだありません"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("Calendar ビュー: そもそも記録が無い日は「まだありません」を出す", async () => {
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record("a", "morning", "2026-05-20T03:00:00Z"), // 5/20 のみ
+    ];
+
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    // 記録が無い 5/15 を選択
+    await user.click(screen.getByRole("gridcell", { name: /^15日/ }));
+
+    expect(
+      screen.getByText("この日の記録はまだありません"),
+    ).toBeInTheDocument();
+  });
+
   it("カレンダーの aria-label は同日複数 record の実件数を読み上げる", () => {
     // Copilot review PR #33 指摘: types.size でなく実際の件数を使う
     const records: RecordRow[] = [

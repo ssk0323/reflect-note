@@ -370,7 +370,12 @@ function CalendarView({
           >
             <span className="sk-eyebrow">
               {selectedDate
-                ? "この日の記録はまだありません"
+                ? // フィルタ適用で「その日自体は記録があるが今のフィルタには
+                  // 該当しない」場合と「そもそも記録が無い日」を区別する
+                  // (Copilot review PR #33 で指摘あり)。
+                  (countsByDate.get(selectedDate) ?? 0) > 0
+                  ? "この種別の記録はこの日にはありません"
+                  : "この日の記録はまだありません"
                 : "左のカレンダーから日付を選んでください"}
             </span>
           </div>

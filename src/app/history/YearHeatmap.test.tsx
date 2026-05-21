@@ -36,7 +36,9 @@ describe("YearHeatmap", () => {
       ["2026-01-08", 5],
     ]);
     const { container } = render(<YearHeatmap year={2026} countsByDate={counts} />);
-    // 1 件以上の cell には title 属性が付く (0 件は title="日付: 0件")
+    // 年内 cell には件数を含む title="YYYY-MM-DD: N件" が付与される
+    // (0 件の日も "...: 0件" として hover で確認できる)。
+    expect(container.querySelector('[title="2026-01-05: 0件"]')).toBeTruthy();
     expect(container.querySelector('[title="2026-01-06: 1件"]')).toBeTruthy();
     expect(container.querySelector('[title="2026-01-07: 2件"]')).toBeTruthy();
     expect(container.querySelector('[title="2026-01-08: 5件"]')).toBeTruthy();

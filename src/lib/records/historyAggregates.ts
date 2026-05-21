@@ -1,21 +1,10 @@
 import type { RecordRow } from "./types";
 import type { FlowType } from "@/lib/flows";
+import { toJstDateKey } from "./group";
 
 /** 履歴ページのヒートマップ・フィルタバッジ用の集計ヘルパー。
- *  date の決め方は groupRecordsByDate と同じ (JST の暦日)。 */
-
-const TIME_ZONE = "Asia/Tokyo";
-
-const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: TIME_ZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-function toJstDateKey(isoDateTime: string): string {
-  return dateKeyFormatter.format(new Date(isoDateTime));
-}
+ *  date の決め方は groupRecordsByDate と同じ (JST の暦日)。
+ *  日付キー生成は @/lib/records/group#toJstDateKey に集約済み。 */
 
 /** records を JST 日付ごとの件数 Map に集計。ヒートマップに使う。 */
 export function countByDate(records: RecordRow[]): Map<string, number> {

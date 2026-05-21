@@ -3,7 +3,11 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import type { FlowType } from "@/lib/flows";
-import { formatJstMonth, groupRecordsByDate } from "@/lib/records/group";
+import {
+  formatJstDateWithWeekday,
+  formatJstMonth,
+  groupRecordsByDate,
+} from "@/lib/records/group";
 import {
   countByDate,
   countByType,
@@ -33,8 +37,15 @@ function useIsMobile(): boolean {
   return useSyncExternalStore(
     (callback) => {
       const mql = window.matchMedia("(max-width: 768px)");
-      mql.addEventListener("change", callback);
-      return () => mql.removeEventListener("change", callback);
+      // Safari 13 以前は addEventListener が無く addListener のみ。
+      // 同様に removeEventListener も無い場合があるので feature detect する
+      // (Copilot review PR #33 で指摘あり)。
+      if (typeof mql.addEventListener === "function") {
+        mql.addEventListener("change", callback);
+        return () => mql.removeEventListener("change", callback);
+      }
+      mql.addListener(callback);
+      return () => mql.removeListener(callback);
     },
     () => window.matchMedia("(max-width: 768px)").matches,
     () => false, // SSR fallback: PC レイアウト相当
@@ -156,6 +167,7 @@ export function HistoryClient({ records, year, todayDate, todayYear }: Props) {
           selectedDate={selectedDate}
           onSelectDate={setSelectedDate}
           typesByDate={dateTypes}
+          countsByDate={dateCounts}
           selectedDayRecords={selectedDayRecords.filter((r) =>
             filter === "all" ? true : r.type === filter,
           )}
@@ -265,6 +277,7 @@ function CalendarView({
   selectedDate,
   onSelectDate,
   typesByDate,
+  countsByDate,
   selectedDayRecords,
   todayDate,
 }: {
@@ -274,6 +287,7 @@ function CalendarView({
   selectedDate: string | null;
   onSelectDate: (date: string) => void;
   typesByDate: Map<string, Set<FlowType>>;
+  countsByDate: Map<string, number>;
   selectedDayRecords: RecordRow[];
   todayDate: string;
 }) {
@@ -324,6 +338,7 @@ function CalendarView({
           month={month}
           selectedDate={selectedDate}
           typesByDate={typesByDate}
+          countsByDate={countsByDate}
           todayDate={todayDate}
           onSelectDate={onSelectDate}
         />
@@ -337,7 +352,7 @@ function CalendarView({
           <div>
             <p className="sk-eyebrow">選択中の日</p>
             <h2 className="sk-h mt-1" style={{ fontSize: 20 }}>
-              {selectedDate ? formatSelectedDate(selectedDate) : "日付を選んでください"}
+              {selectedDate ? formatDateKey(selectedDate) : "日付を選んでください"}
             </h2>
           </div>
         </div>
@@ -378,9 +393,9 @@ function ListView({
   return (
     <div className="space-y-6">
       {groups.map((group) => (
-        <section key={group.dateKey} aria-label={formatGroupHeader(group.dateKey)}>
+        <section key={group.dateKey} aria-label={formatDateKey(group.dateKey)}>
           <div className="mb-2 flex items-baseline justify-between">
-            <p className="sk-eyebrow">{formatGroupHeader(group.dateKey)}</p>
+            <p className="sk-eyebrow">{formatDateKey(group.dateKey)}</p>
             <span className="sk-mono">{group.records.length}件</span>
           </div>
           <div className="flex flex-col gap-2">
@@ -409,29 +424,11 @@ function EmptyState({ filter }: { filter: Filter }) {
   );
 }
 
-function formatSelectedDate(dateKey: string): string {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  const fmt = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "short",
-  });
-  // toJstDateString は時刻を考慮するが、日付のみの dateKey なら UTC で問題ない。
-  return fmt.format(date);
-}
-
-function formatGroupHeader(dateKey: string): string {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  const fmt = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "short",
-  });
-  return fmt.format(date);
+/** YYYY-MM-DD の JST 日付キーを「2026年5月21日(木)」形式に整形する。
+ *  キーから JST 正午相当の UTC を作って formatJstDateWithWeekday に渡せば、
+ *  既存ヘルパーで一貫した表記が得られる。 */
+function formatDateKey(dateKey: string): string {
+  // 12:00 JST = 03:00 UTC 相当の Date を作り、formatter に渡す。
+  // 時刻は表示に出ないが UTC 起点で日付がずれないよう JST 正午を選ぶ。
+  return formatJstDateWithWeekday(`${dateKey}T12:00:00+09:00`);
 }

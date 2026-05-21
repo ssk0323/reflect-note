@@ -91,15 +91,20 @@ function DeleteButton({ recordId }: { recordId: string }) {
     if (!window.confirm("この記録を削除しますか？")) return;
     setError(null);
     startTransition(async () => {
+      // UI には汎用メッセージのみ。Supabase の SQL/RLS 等の内部詳細は
+      // console.error に留めて画面に出さない (Copilot review PR #33 で指摘あり)。
+      const genericMessage = "削除に失敗しました。しばらくしてから再度お試しください。";
       try {
         const result = await deleteRecord(recordId);
         if (result.ok) {
           router.refresh();
         } else {
-          setError(result.error ?? "削除に失敗しました");
+          console.error("deleteRecord returned error", result.error);
+          setError(genericMessage);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "削除に失敗しました");
+        console.error("deleteRecord threw", e);
+        setError(genericMessage);
       }
     });
   }

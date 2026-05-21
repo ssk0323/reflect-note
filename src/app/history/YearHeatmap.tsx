@@ -20,8 +20,15 @@ export function YearHeatmap({ year, countsByDate }: Props) {
   const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
   const firstMonday = new Date(jan1.getTime() + diffToMonday * 24 * 60 * 60 * 1000);
 
-  // 53 週分の grid を生成 (大半の年は 52 週、一部の年は 53 週ある)
-  const totalWeeks = 53;
+  // 12/31 が属する週の月曜まで grid を伸ばす。閏年で 1/1 が日曜のときは
+  // 54 列必要になる (例: 2012, 2040) ため、年の終端から動的に計算する
+  // (Codex review PR #33 で指摘あり)。
+  const dec31 = new Date(Date.UTC(year, 11, 31));
+  const dec31Dow = dec31.getUTCDay();
+  const diffDec31ToMonday = dec31Dow === 0 ? -6 : 1 - dec31Dow;
+  const lastMonday = new Date(dec31.getTime() + diffDec31ToMonday * 24 * 60 * 60 * 1000);
+  const totalWeeks =
+    Math.round((lastMonday.getTime() - firstMonday.getTime()) / (7 * 24 * 60 * 60 * 1000)) + 1;
   const cells: { week: number; day: number; dateKey: string | null; count: number }[] = [];
   for (let w = 0; w < totalWeeks; w++) {
     for (let d = 0; d < 7; d++) {

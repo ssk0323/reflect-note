@@ -181,6 +181,41 @@ describe("HistoryClient", () => {
     confirmSpy.mockRestore();
   });
 
+  it("カレンダーの aria-label は同日複数 record の実件数を読み上げる", () => {
+    // Copilot review PR #33 指摘: types.size でなく実際の件数を使う
+    const records: RecordRow[] = [
+      record("a", "morning", "2026-05-20T03:00:00Z"),
+      record("b", "morning", "2026-05-20T04:00:00Z"), // 同日 同 type 2 件目
+      record("c", "night", "2026-05-20T13:00:00Z"),
+    ];
+
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    const cell = screen.getByRole("gridcell", { name: /20日/ });
+    expect(cell.getAttribute("aria-label")).toContain("3件の記録");
+  });
+
+  it("削除失敗時は内部メッセージではなく汎用メッセージを表示する", async () => {
+    // Copilot review PR #33 指摘: Supabase の SQL/RLS 詳細を UI に出さない
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    deleteRecord.mockResolvedValue({ ok: false, error: "permission denied for table records" });
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record("abc", "morning", "2026-05-20T03:00:00Z"),
+    ];
+
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
+    await user.click(screen.getByRole("button", { name: "この記録を削除" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/しばらくしてから再度お試しください/);
+    expect(alert).not.toHaveTextContent(/permission denied/);
+    confirmSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it("confirm キャンセル時は deleteRecord を呼ばない", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     const user = userEvent.setup();

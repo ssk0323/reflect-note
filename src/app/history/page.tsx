@@ -69,8 +69,13 @@ export default async function HistoryPage({ searchParams }: PageProps) {
   }
 
   const records = (data ?? []) as RecordRow[];
+  // year が変わったら HistoryClient を再マウントして calendarMonth /
+  // selectedDate の初期値を新しい props で再評価させる (Codex/Copilot review
+  // PR #33 で指摘あり: useState 初期化子は初回しか走らないため year ナビ後に
+  // state が前年の値を引きずる)。
   return (
     <HistoryClient
+      key={year}
       records={records}
       year={year}
       todayDate={todayDate}

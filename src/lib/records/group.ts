@@ -17,9 +17,14 @@ const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
+/** ISO 文字列または Date を JST の YYYY-MM-DD 日付キーに変換する。
+ *  History (heatmap / calendar dots / aggregates) と Group/Streak で共通利用。 */
+export function toJstDateKey(input: string | Date): string {
+  return dateKeyFormatter.format(input instanceof Date ? input : new Date(input));
+}
+
 function toDateKey(isoDateTime: string): string {
-  // en-CA locale は YYYY-MM-DD で返してくれるので、JST の日付文字列を取得できる
-  return dateKeyFormatter.format(new Date(isoDateTime));
+  return toJstDateKey(isoDateTime);
 }
 
 export function groupRecordsByDate(records: RecordRow[]): DateGroup[] {

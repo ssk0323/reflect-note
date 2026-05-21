@@ -11,6 +11,8 @@ type Props = {
   selectedDate: string | null;
   /** 各日の記録 type セット */
   typesByDate: Map<string, Set<FlowType>>;
+  /** 各日の実際の記録件数 (同日複数 morning など type 数とずれるため別途渡す) */
+  countsByDate: Map<string, number>;
   /** 今日の JST 日付 (YYYY-MM-DD) */
   todayDate: string;
   /** 日付クリック時のコールバック */
@@ -24,6 +26,7 @@ export function MonthCalendar({
   month,
   selectedDate,
   typesByDate,
+  countsByDate,
   todayDate,
   onSelectDate,
 }: Props) {
@@ -79,6 +82,7 @@ export function MonthCalendar({
               isSelected={selectedDate === c.dateKey}
               isToday={todayDate === c.dateKey}
               types={typesByDate.get(c.dateKey) ?? new Set()}
+              recordCount={countsByDate.get(c.dateKey) ?? 0}
               onSelect={onSelectDate}
             />
           ),
@@ -94,6 +98,7 @@ function DayCell({
   isSelected,
   isToday,
   types,
+  recordCount,
   onSelect,
 }: {
   day: number;
@@ -101,15 +106,15 @@ function DayCell({
   isSelected: boolean;
   isToday: boolean;
   types: Set<FlowType>;
+  recordCount: number;
   onSelect: (date: string) => void;
 }) {
-  const hasRecords = types.size > 0;
   return (
     <button
       type="button"
       role="gridcell"
       aria-selected={isSelected}
-      aria-label={`${day}日${hasRecords ? ` ・ ${types.size}件の記録` : ""}${isToday ? " (今日)" : ""}`}
+      aria-label={`${day}日${recordCount > 0 ? ` ・ ${recordCount}件の記録` : ""}${isToday ? " (今日)" : ""}`}
       onClick={() => onSelect(dateKey)}
       className="relative cursor-pointer text-left"
       style={{

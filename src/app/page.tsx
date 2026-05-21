@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { definedFlows, type Flow } from "@/lib/flows";
+import type { Flow } from "@/lib/flows";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { RecordRow } from "@/lib/records/types";
 import {
@@ -9,41 +9,21 @@ import {
   type BoundsUtc,
 } from "@/lib/records/period";
 import {
-  formatJstDateWithWeekday,
   formatJstMonth,
   formatJstShortDate,
-  formatJstTime,
 } from "@/lib/records/group";
 import {
   STREAK_LOOKBACK_DAYS,
   computeStreak,
 } from "@/lib/records/streak";
 import { computeAchievements } from "@/lib/records/achievements";
-import { BadgesCard } from "./_components/BadgesCard";
 import { GoalCard, type CheckableField } from "./_components/GoalCard";
-import { StreakCard } from "./_components/StreakCard";
+import { HeroCard, type HeroMode } from "./_components/HeroCard";
+import { TopStreakChips } from "./_components/TopStreakChips";
 
 export const dynamic = "force-dynamic";
 
 type SupabaseServerClient = Awaited<ReturnType<typeof createSupabaseServerClient>>;
-
-const flowMeta: Record<Flow["type"], { emoji: string; description: string }> = {
-  morning: { emoji: "🌅", description: "今日の目標とタスク3つを決めます。" },
-  night: { emoji: "🌙", description: "今日を振り返り、明日につなげます。" },
-  weeklyGoal: { emoji: "🗓️", description: "今週の目標と優先タスクを決めます。" },
-  weeklyReview: { emoji: "✅", description: "今週できたこと、学び、来週のTryを書きます。" },
-  monthlyGoal: { emoji: "🎯", description: "今月の目標、テーマ、重点タスクを決めます。" },
-  monthlyReview: { emoji: "📌", description: "今月の成果、学び、来月のTryを書きます。" },
-};
-
-const flowOrder: Flow["type"][] = [
-  "morning",
-  "night",
-  "weeklyGoal",
-  "weeklyReview",
-  "monthlyGoal",
-  "monthlyReview",
-];
 
 const MORNING_CHECKABLES: CheckableField[] = [
   { key: "goal", kind: "goal", label: "目標" },
@@ -66,8 +46,6 @@ const MONTHLY_GOAL_CHECKABLES: CheckableField[] = [
   { key: "monthPriority3", kind: "task", label: "重点タスク 3" },
 ];
 
-// recentRecords (created_at desc) から、指定 type かつ指定期間内の
-// 最新 1 件を返す。降順なので最初に一致したものが最新。
 function pickLatestInBounds(
   records: RecordRow[],
   type: Flow["type"],
@@ -92,7 +70,7 @@ async function fetchRecentRecords(
     .select("id, type, answers, checks, created_at, updated_at")
     .gte("created_at", lookbackStart)
     .order("created_at", { ascending: false })
-    .limit(1000); // PostgREST デフォルト上限 (1000) での silent truncation を明示
+    .limit(1000);
 
   if (error) {
     console.error("Failed to fetch recent records", error);
@@ -101,21 +79,67 @@ async function fetchRecentRecords(
   return { records: (data ?? []) as RecordRow[], error: null };
 }
 
+/** JST の時刻と、今日の morning/night の有無からヒーローの提案モードを決める。
+ *  - 04:00-15:00: morning 未入力なら朝を提案、済なら夜（夕方寄りでも事前にプッシュ）
+ *  - 15:00-04:00: night 未入力なら夜を提案、済なら done
+ *  両方済んでいれば常に done。 */
+function pickHeroMode(
+  now: Date,
+  todayMorning: RecordRow | null,
+  todayNight: RecordRow | null,
+): HeroMode {
+  if (todayMorning && todayNight) return "done";
+  const hourJst = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Tokyo",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now),
+  );
+  const isMorningWindow = hourJst >= 4 && hourJst < 15;
+  if (isMorningWindow) {
+    return todayMorning ? "night" : "morning";
+  }
+  return todayNight ? "morning" : "night";
+}
+
+function pickGreeting(now: Date): string {
+  const hourJst = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Tokyo",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now),
+  );
+  if (hourJst < 5) return "おやすみなさい";
+  if (hourJst < 11) return "おはようございます";
+  if (hourJst < 17) return "こんにちは";
+  return "こんばんは";
+}
+
+const FLOW_LABELS_SHORT: Record<Flow["type"], string> = {
+  morning: "朝のセットアップ",
+  night: "夜の振り返り",
+  weeklyGoal: "週の目標",
+  weeklyReview: "週の振り返り",
+  monthlyGoal: "月の目標",
+  monthlyReview: "月の振り返り",
+};
+
+const dateMetaFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo",
+  month: "long",
+  day: "numeric",
+  weekday: "long",
+});
+
 export default async function Home() {
-  // 全カードで同じ supabase client を共有 (cookies() + client 生成を 1 回に集約)
   const supabase = await createSupabaseServerClient();
   const now = new Date();
   const dayBounds = getJstDayBoundsUtc(now);
   const weekBounds = getJstWeekBoundsUtc(now);
   const monthBounds = getJstMonthBoundsUtc(now);
 
-  // 過去 35 日分の records を 1 query で取得する。
-  // 「本日の morning」「今週の weeklyGoal」「今月の monthlyGoal」も
-  // すべてこの期間に含まれるので、追加 fetch せずメモリ派生する。
-  //
-  // 重要: lookback の開始は「N 日前の JST 00:00」に丸める。
-  // `now.getTime() - N*24h` を直接使うと、現在時刻が正午なら最古日の
-  // 午前分が取得対象から漏れ、ストリーク/バッジが過小計上になりうる。
   const lookbackShifted = new Date(
     now.getTime() - STREAK_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
   );
@@ -129,124 +153,81 @@ export default async function Home() {
   const nightStreak = computeStreak(recentRecords, "night", now);
   const achievements = computeAchievements(recentRecords, now);
 
-  const today = pickLatestInBounds(recentRecords, "morning", dayBounds);
+  const todayMorning = pickLatestInBounds(recentRecords, "morning", dayBounds);
+  const todayNight = pickLatestInBounds(recentRecords, "night", dayBounds);
   const weeklyGoal = pickLatestInBounds(recentRecords, "weeklyGoal", weekBounds);
   const monthlyGoal = pickLatestInBounds(recentRecords, "monthlyGoal", monthBounds);
 
-  // カードの subtitle (対象期間の明示)。
-  // Issue #23 の要件「記録が未入力のカードはタイトルのみ」に従い、
-  // record が無いカードには subtitle を渡さない (undefined)。
-  // - 今日: "2026年5月21日 (木) / 07:30 入力"
-  // - 今週: "5/19 〜 5/25" (月曜始まり、日曜終わり)
-  // - 今月: "2026年5月"
+  const heroMode = pickHeroMode(now, todayMorning, todayNight);
+  const greeting = pickGreeting(now);
+  const dateMeta = dateMetaFormatter.format(now);
+
   const weekStartDate = new Date(weekBounds.start);
   const weekSundayDate = new Date(
     weekStartDate.getTime() + 6 * 24 * 60 * 60 * 1000,
   );
-  const todaySubtitle = today
-    ? `${formatJstDateWithWeekday(dayBounds.start)} / ${formatJstTime(today.created_at)} 入力`
-    : undefined;
   const weekSubtitle = weeklyGoal
     ? `${formatJstShortDate(weekStartDate)} 〜 ${formatJstShortDate(weekSundayDate)}`
     : undefined;
   const monthSubtitle = monthlyGoal ? formatJstMonth(monthBounds.start) : undefined;
 
   return (
-    <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
-      <header className="rounded-3xl bg-zinc-900 p-6 text-white shadow-sm sm:p-8">
-        <p className="text-sm font-semibold text-zinc-300">reflect-note</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-          朝に整え、夜に振り返る。
-        </h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300">
-          今日・今週・今月の目標を一覧で確認し、達成したらチェックを付けます。
-        </p>
-      </header>
-
-      <section
-        aria-label="現在の目標"
-        className="mt-6 grid gap-4 md:grid-cols-3"
+    <main className="mx-auto min-h-screen w-full max-w-6xl px-5 py-8 sm:px-7 sm:py-12">
+      <header
+        className="mb-6 flex flex-wrap items-end justify-between gap-3 pb-4"
+        style={{ borderBottom: "1px dashed var(--color-line)" }}
       >
-        <GoalCard
-          title="本日の目標"
-          emoji="🌅"
-          subtitle={todaySubtitle}
-          record={today}
-          checkableFields={MORNING_CHECKABLES}
-          emptyMessage="本日の目標はまだ設定されていません。"
-          emptyCta={{ href: "/flows/morning", label: "朝のセットアップを始める" }}
-          editHref={today ? `/flows/morning?edit=${today.id}` : undefined}
-        />
-        <GoalCard
-          title="今週の目標"
-          emoji="🗓️"
-          subtitle={weekSubtitle}
-          record={weeklyGoal}
-          checkableFields={WEEKLY_GOAL_CHECKABLES}
-          emptyMessage="今週の目標はまだ設定されていません。"
-          emptyCta={{ href: "/flows/weeklyGoal", label: "週の目標を設定する" }}
-          editHref={weeklyGoal ? `/flows/weeklyGoal?edit=${weeklyGoal.id}` : undefined}
-        />
-        <GoalCard
-          title="今月の目標"
-          emoji="🎯"
-          subtitle={monthSubtitle}
-          record={monthlyGoal}
-          checkableFields={MONTHLY_GOAL_CHECKABLES}
-          emptyMessage="今月の目標はまだ設定されていません。"
-          emptyCta={{ href: "/flows/monthlyGoal", label: "月の目標を設定する" }}
-          editHref={monthlyGoal ? `/flows/monthlyGoal?edit=${monthlyGoal.id}` : undefined}
-        />
-      </section>
-
-      <section
-        aria-label="ストリークとバッジ"
-        className="mt-6 grid gap-4 md:grid-cols-2"
-      >
-        <StreakCard
+        <div>
+          <p className="sk-eyebrow">{dateMeta}</p>
+          <p className="sk-h mt-1">{greeting}</p>
+        </div>
+        <TopStreakChips
           morningStreak={morningStreak}
           nightStreak={nightStreak}
+          achievements={achievements}
           error={recentError}
         />
-        <BadgesCard achievements={achievements} error={recentError} />
-      </section>
+      </header>
 
-      <h2 className="mt-10 text-sm font-bold text-zinc-500">入力フローを開く</h2>
-      <section className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {flowOrder.map((type) => {
-          const flow = definedFlows[type];
-          const meta = flowMeta[type];
-          return (
-            <Link
-              key={type}
-              href={`/flows/${type}`}
-              className="group block rounded-3xl border border-zinc-200 bg-white p-6 text-left shadow-sm transition hover:scale-[1.01] hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950"
-            >
-              <div className="text-3xl" aria-hidden>
-                {meta.emoji}
-              </div>
-              <h3 className="mt-4 text-lg font-bold text-zinc-900 dark:text-zinc-50">
-                {flow.label}
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-                {meta.description}
-              </p>
-              <p className="mt-5 text-sm font-bold text-zinc-900 group-hover:underline dark:text-zinc-50">
-                始める →
-              </p>
-            </Link>
-          );
-        })}
-      </section>
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        <HeroCard
+          mode={heroMode}
+          todayRecord={todayMorning}
+          morningCheckables={MORNING_CHECKABLES}
+          flowLabels={FLOW_LABELS_SHORT}
+        />
 
-      <section className="mt-6 flex justify-end">
-        <Link
-          href="/history"
-          className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
-        >
-          過去の記録を見る →
-        </Link>
-      </section>
+        <aside className="flex flex-col gap-4" aria-label="今週と今月">
+          <GoalCard
+            title="今週の目標"
+            emoji="🗓️"
+            subtitle={weekSubtitle}
+            record={weeklyGoal}
+            checkableFields={WEEKLY_GOAL_CHECKABLES}
+            emptyMessage="今週の目標はまだ設定されていません。"
+            emptyCta={{ href: "/flows/weeklyGoal", label: "週の目標を設定する" }}
+            editHref={weeklyGoal ? `/flows/weeklyGoal?edit=${weeklyGoal.id}` : undefined}
+          />
+          <GoalCard
+            title="今月の目標"
+            emoji="🎯"
+            subtitle={monthSubtitle}
+            record={monthlyGoal}
+            checkableFields={MONTHLY_GOAL_CHECKABLES}
+            emptyMessage="今月の目標はまだ設定されていません。"
+            emptyCta={{ href: "/flows/monthlyGoal", label: "月の目標を設定する" }}
+            editHref={monthlyGoal ? `/flows/monthlyGoal?edit=${monthlyGoal.id}` : undefined}
+          />
+
+          <Link
+            href="/history"
+            className="sk-mono text-center hover:text-[var(--color-ink)]"
+          >
+            ── 過去の記録を見る ──
+          </Link>
+        </aside>
+      </div>
+
     </main>
   );
 }

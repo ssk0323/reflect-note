@@ -7,25 +7,17 @@ export type CheckableFieldKind = "goal" | "task";
 export type CheckableField = {
   key: string;
   kind: CheckableFieldKind;
-  // チェックボックスの隣に出す短いラベル (例: "目標", "タスク 1")
   label: string;
 };
 
 type Props = {
   title: string;
   emoji: string;
-  // タイトルの下に表示する補助情報 (例: 期間や入力日時)
   subtitle?: string;
-  // 記録があれば渡す。なければ未設定状態を表示
   record: RecordRow | null;
-  // チェック対象のフィールド。goal と task が混在して渡されるが、
-  // 内部で 2 セクションに分けて表示する。
   checkableFields: CheckableField[];
-  // 未設定時のメッセージ
   emptyMessage: string;
-  // 未設定時に押すリンクの URL とラベル
   emptyCta: { href: string; label: string };
-  // 設定済みでも「編集する」リンクを出すなら href を指定
   editHref?: string;
 };
 
@@ -59,52 +51,58 @@ export function GoalCard({
 
   const goals = visibleItems.filter((i) => i.kind === "goal");
   const tasks = visibleItems.filter((i) => i.kind === "task");
+  const checkedCount = visibleItems.filter(
+    (i) => record?.checks[i.key] === true,
+  ).length;
 
   return (
-    <article className="flex flex-col rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <article className="sk-card flex flex-col">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl" aria-hidden>
+          <div className="flex items-center gap-2">
+            <span className="text-lg" aria-hidden>
               {emoji}
             </span>
-            <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
-              {title}
-            </h2>
+            <h2 className="sk-h">{title}</h2>
           </div>
-          {subtitle && (
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              {subtitle}
-            </p>
-          )}
+          {subtitle && <p className="sk-mono mt-1">{subtitle}</p>}
         </div>
         {record != null && editHref && (
           <Link
             href={editHref}
             aria-label={`${title}を編集する`}
-            className="rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            className="sk-mono inline-flex items-center hover:text-[var(--color-ink)]"
           >
-            <span aria-hidden>✏️ </span>編集
+            <span aria-hidden>✏️ </span>編集 ›
           </Link>
         )}
       </div>
 
       {record == null ? (
-        <div className="mt-4 flex flex-1 flex-col items-start gap-3 rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-900">
-          <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+        <div
+          className="sk-card-dashed mt-3 flex flex-1 flex-col items-start gap-3 p-4"
+          style={{
+            border: "1.2px dashed var(--color-line)",
+            borderRadius: "var(--sketch-radius-card)",
+          }}
+        >
+          <p className="text-sm leading-6" style={{ color: "var(--color-ink-2)" }}>
             {emptyMessage}
           </p>
-          <Link
-            href={emptyCta.href}
-            className="rounded-2xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
+          <Link href={emptyCta.href} className="sk-btn sk-btn-ink">
             {emptyCta.label}
           </Link>
         </div>
       ) : (
-        <div className="mt-4 space-y-5">
+        <div className="mt-3 space-y-4">
           {visibleItems.length === 0 ? (
-            <p className="rounded-2xl bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            <p
+              className="rounded-2xl p-3 text-sm"
+              style={{
+                background: "var(--color-bg-2)",
+                color: "var(--color-ink-2)",
+              }}
+            >
               目標とタスクが未入力です。
             </p>
           ) : (
@@ -112,7 +110,6 @@ export function GoalCard({
               {goals.length > 0 && (
                 <CheckableSection
                   sectionLabel="目標"
-                  accentClass="bg-amber-500"
                   items={goals}
                   record={record}
                 />
@@ -120,11 +117,15 @@ export function GoalCard({
               {tasks.length > 0 && (
                 <CheckableSection
                   sectionLabel="タスク"
-                  accentClass="bg-sky-500"
                   items={tasks}
                   record={record}
                 />
               )}
+              <div className="flex items-center justify-between">
+                <span className="sk-mono">
+                  {checkedCount} / {visibleItems.length} 達成
+                </span>
+              </div>
             </>
           )}
         </div>
@@ -135,27 +136,17 @@ export function GoalCard({
 
 function CheckableSection({
   sectionLabel,
-  accentClass,
   items,
   record,
 }: {
   sectionLabel: string;
-  accentClass: string;
   items: VisibleItem[];
   record: RecordRow;
 }) {
   return (
     <section aria-label={sectionLabel}>
-      <div className="mb-2 flex items-center gap-2">
-        <span
-          aria-hidden
-          className={`h-2 w-2 rounded-full ${accentClass}`}
-        />
-        <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-          {sectionLabel}
-        </h3>
-      </div>
-      <div className="space-y-2">
+      <p className="sk-eyebrow mb-2">{sectionLabel}</p>
+      <div className="space-y-1.5">
         {items.map((item) => (
           <CheckableItem
             key={item.key}

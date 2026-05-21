@@ -27,6 +27,8 @@ describe("EditClient", () => {
       <EditClient
         flow={morningFlow}
         recordId="abc"
+        initialTargetDate={null}
+        initialFallbackDate="2026-05-21"
         initialAnswers={{}}
       />,
     );
@@ -42,6 +44,8 @@ describe("EditClient", () => {
       <EditClient
         flow={morningFlow}
         recordId="abc"
+        initialTargetDate={null}
+        initialFallbackDate="2026-05-21"
         initialAnswers={{
           goal: "GOAL_VALUE",
           task1: "TASK1_VALUE",
@@ -61,6 +65,8 @@ describe("EditClient", () => {
       <EditClient
         flow={morningFlow}
         recordId="abc"
+        initialTargetDate={null}
+        initialFallbackDate="2026-05-21"
         initialAnswers={{ goal: "old" }}
       />,
     );
@@ -75,6 +81,7 @@ describe("EditClient", () => {
     expect(updateFlowRecord).toHaveBeenCalledWith(
       "abc",
       expect.objectContaining({ goal: "new goal" }),
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     );
     expect(push).toHaveBeenCalledWith("/history");
   });
@@ -83,7 +90,7 @@ describe("EditClient", () => {
     updateFlowRecord.mockResolvedValue({ ok: false, error: "boom" });
     const user = userEvent.setup();
     render(
-      <EditClient flow={morningFlow} recordId="abc" initialAnswers={{}} />,
+      <EditClient flow={morningFlow} recordId="abc" initialAnswers={{}} initialTargetDate={null} initialFallbackDate="2026-05-21" />,
     );
 
     await user.click(screen.getByRole("button", { name: "保存する" }));
@@ -93,7 +100,7 @@ describe("EditClient", () => {
 
   it("renders group fields (timeUsage) as labeled inputs", () => {
     render(
-      <EditClient flow={nightFlow} recordId="abc" initialAnswers={{}} />,
+      <EditClient flow={nightFlow} recordId="abc" initialAnswers={{}} initialTargetDate={null} initialFallbackDate="2026-05-21" />,
     );
 
     // group の 4 つの label が並んで見える
@@ -106,9 +113,56 @@ describe("EditClient", () => {
 
   it("renders a cancel link to /history", () => {
     render(
-      <EditClient flow={morningFlow} recordId="abc" initialAnswers={{}} />,
+      <EditClient flow={morningFlow} recordId="abc" initialAnswers={{}} initialTargetDate={null} initialFallbackDate="2026-05-21" />,
     );
     const cancel = screen.getByRole("link", { name: "キャンセル" });
     expect(cancel).toHaveAttribute("href", "/history");
+  });
+
+  it("旧データ (target_date NULL) の編集では initialFallbackDate を保存時に渡す", async () => {
+    // Codex/Copilot P1 指摘: NULL の旧レコードを保存しただけで today に書き換わる回帰を防ぐ
+    updateFlowRecord.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <EditClient
+        flow={morningFlow}
+        recordId="legacy-1"
+        initialTargetDate={null}
+        initialFallbackDate="2026-04-10"
+        initialAnswers={{ goal: "古い目標" }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(updateFlowRecord).toHaveBeenCalledWith(
+      "legacy-1",
+      expect.objectContaining({ goal: "古い目標" }),
+      "2026-04-10",
+    );
+  });
+
+  it("週フローでは initialFallbackDate をその週の月曜日に丸めて使う", async () => {
+    updateFlowRecord.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    // 2026-05-21 (木) は 2026-05-18 (月) を含む週
+    const { weeklyGoalFlow } = await import("@/lib/flows/weeklyGoal");
+    render(
+      <EditClient
+        flow={weeklyGoalFlow}
+        recordId="legacy-week"
+        initialTargetDate={null}
+        initialFallbackDate="2026-05-21"
+        initialAnswers={{}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+
+    expect(updateFlowRecord).toHaveBeenCalledWith(
+      "legacy-week",
+      expect.anything(),
+      "2026-05-18",
+    );
   });
 });

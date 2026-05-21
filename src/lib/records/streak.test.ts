@@ -11,6 +11,7 @@ function morning(createdAt: string): RecordRow {
     type: "morning",
     answers: {},
     checks: {},
+    target_date: null,
     created_at: createdAt,
     updated_at: createdAt,
   };

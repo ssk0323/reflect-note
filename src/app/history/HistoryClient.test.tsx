@@ -26,6 +26,7 @@ function record(
     type,
     answers,
     checks: {},
+    target_date: null,
     created_at: createdAt,
     updated_at: createdAt,
   };

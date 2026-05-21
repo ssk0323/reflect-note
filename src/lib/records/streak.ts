@@ -59,7 +59,9 @@ export function computeStreak(
   const days = new Set<string>();
   for (const r of records) {
     if (r.type !== type) continue;
-    days.add(toJstDateKey(r.created_at));
+    // target_date があれば「いつのための記録か」を優先 (Issue #30)。
+    // 旧データ (target_date NULL) は created_at の JST 日付に fallback。
+    days.add(r.target_date ?? toJstDateKey(r.created_at));
   }
   if (days.size === 0) {
     return { current: 0, longest: 0, lastDate: null };

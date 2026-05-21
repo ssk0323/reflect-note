@@ -4,6 +4,7 @@ import {
   getJstWeekBoundsUtc,
   type BoundsUtc,
 } from "./period";
+import { resolveRecordDate, toJstDateString } from "./targetDate";
 
 // 月間達成バッジのしきい値 (デフォルト: 月 20 件以上)
 export const MONTHLY_COUNT_THRESHOLD = 20;
@@ -19,13 +20,17 @@ export type Achievement = {
   description: string;
 };
 
-function withinBounds(record: RecordRow, bounds: BoundsUtc): boolean {
-  // bounds は `new Date().toISOString()` 由来でミリ秒 3 桁の `Z` 表記固定だが、
-  // record.created_at は Supabase 側で `+00:00` 表記やマイクロ秒精度になる
-  // 可能性があり、文字列比較だと境界で誤判定する。Date.parse でタイムスタンプ
-  // 数値化してから比較する。
-  const t = Date.parse(record.created_at);
-  return t >= Date.parse(bounds.start) && t < Date.parse(bounds.end);
+function withinBoundsByResolvedDate(
+  record: RecordRow,
+  bounds: BoundsUtc,
+): boolean {
+  // target_date があれば「いつのための記録か」を優先 (Issue #30)。
+  // bounds は UTC ISO だが、record 側を JST 日付文字列化して文字列比較する方が
+  // タイムゾーン誤差なく正確に判定できる。
+  const recordDate = resolveRecordDate(record);
+  const startDate = toJstDateString(new Date(bounds.start));
+  const endDate = toJstDateString(new Date(bounds.end));
+  return recordDate >= startDate && recordDate < endDate;
 }
 
 /**
@@ -44,8 +49,12 @@ export function computeAchievements(
   const weekBounds = getJstWeekBoundsUtc(now);
   const monthBounds = getJstMonthBoundsUtc(now);
 
-  const weekRecords = records.filter((r) => withinBounds(r, weekBounds));
-  const monthRecords = records.filter((r) => withinBounds(r, monthBounds));
+  const weekRecords = records.filter((r) =>
+    withinBoundsByResolvedDate(r, weekBounds),
+  );
+  const monthRecords = records.filter((r) =>
+    withinBoundsByResolvedDate(r, monthBounds),
+  );
 
   if (
     weekRecords.some((r) => r.type === "weeklyGoal") &&

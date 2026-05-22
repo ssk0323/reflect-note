@@ -8,7 +8,7 @@ export default async function HistoryPage() {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from("records")
-    .select("id, type, answers, checks, created_at, updated_at")
+    .select("id, type, answers, checks, target_date, created_at, updated_at")
     .order("created_at", { ascending: false });
 
   if (error) {

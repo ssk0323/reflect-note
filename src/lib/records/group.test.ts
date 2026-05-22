@@ -8,6 +8,7 @@ function row(id: string, createdAt: string, type: RecordRow["type"] = "morning")
     type,
     answers: {},
     checks: {},
+    target_date: null,
     created_at: createdAt,
     updated_at: createdAt,
   };

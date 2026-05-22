@@ -70,13 +70,18 @@ export function HistoryClient({ records }: Props) {
         <EmptyState filter={filter} />
       ) : (
         <div className="space-y-8">
-          {groups.map((group) => (
+          {groups.map((group) => {
+            // 見出しは group.dateKey から作る。target_date が created_at の JST 日付
+            // とズレるケース (例: 夜に翌日 morning を書く) で、見出しと grouping が
+            // 食い違わないようにするため。
+            const heading = formatDate(group.dateKey);
+            return (
             <section
               key={group.dateKey}
-              aria-label={formatDate(group.records[0].created_at)}
+              aria-label={heading}
             >
               <h2 className="mb-3 text-sm font-bold text-zinc-500">
-                {formatDate(group.records[0].created_at)}
+                {heading}
               </h2>
               <div className="grid gap-4 md:grid-cols-2">
                 {group.records.map((record) => (
@@ -84,7 +89,8 @@ export function HistoryClient({ records }: Props) {
                 ))}
               </div>
             </section>
-          ))}
+            );
+          })}
         </div>
       )}
     </main>

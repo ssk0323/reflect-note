@@ -25,7 +25,9 @@ function toDateKey(isoDateTime: string): string {
 export function groupRecordsByDate(records: RecordRow[]): DateGroup[] {
   const map = new Map<string, RecordRow[]>();
   for (const r of records) {
-    const key = toDateKey(r.created_at);
+    // target_date があれば「いつのための記録か」を優先、
+    // なければ created_at の JST 日付 (旧データ互換)。
+    const key = r.target_date ?? toDateKey(r.created_at);
     const arr = map.get(key);
     if (arr) {
       arr.push(r);

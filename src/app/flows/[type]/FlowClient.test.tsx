@@ -109,6 +109,7 @@ describe("FlowClient (morning)", () => {
     expect(saveFlowRecord).toHaveBeenCalledWith(
       "morning",
       expect.objectContaining({ goal: "目標" }),
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     );
     expect(push).toHaveBeenCalledWith("/");
   });
@@ -196,6 +197,7 @@ describe("FlowClient (night, group question)", () => {
         timeAfternoon: "午後の話",
         timeNight: "夜の話",
       }),
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     );
   });
 });

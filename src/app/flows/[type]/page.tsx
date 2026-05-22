@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getFlow } from "@/lib/flows";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { toJstDateString } from "@/lib/records/targetDate";
 import { EditClient } from "./EditClient";
 import { FlowClient } from "./FlowClient";
 
@@ -25,7 +26,7 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase
       .from("records")
-      .select("id, answers")
+      .select("id, answers, target_date, created_at")
       .eq("id", edit)
       .eq("type", flow.type)
       .maybeSingle();
@@ -40,6 +41,10 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
       notFound();
     }
 
+    // target_date が NULL の旧データ向け fallback。created_at の JST 日付を渡し、
+    // EditClient 側で週/月フローには normalizeTargetDate で月曜/1日に丸めて使う。
+    const fallbackDate = toJstDateString(new Date(data.created_at));
+
     // recordId が変わったら EditClient を再マウントして state をリセット。
     // useState は初回しか初期化されないため、key で remount を強制する。
     return (
@@ -48,6 +53,8 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
         flow={flow}
         recordId={data.id}
         initialAnswers={data.answers}
+        initialTargetDate={data.target_date}
+        initialFallbackDate={fallbackDate}
       />
     );
   }

@@ -3,7 +3,9 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Flow, FlowAnswers, Question } from "@/lib/flows";
+import { defaultDateOptions, formatTargetLabel } from "@/lib/records/targetDate";
 import { saveFlowRecord } from "./actions";
+import { FlowDateChips } from "./FlowDateChips";
 
 type Props = {
   flow: Flow;
@@ -13,6 +15,10 @@ export function FlowClient({ flow }: Props) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<FlowAnswers>({});
+  // target_date のデフォルトはそのフローの「今」(defaultDateOptions の先頭)
+  const [targetDate, setTargetDate] = useState<string>(
+    () => defaultDateOptions(flow.type)[0].value,
+  );
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -41,7 +47,7 @@ export function FlowClient({ flow }: Props) {
     setError(null);
     startTransition(async () => {
       try {
-        const result = await saveFlowRecord(flow.type, answers);
+        const result = await saveFlowRecord(flow.type, answers, targetDate);
         if (result.ok) {
           router.push("/");
         } else {
@@ -54,11 +60,14 @@ export function FlowClient({ flow }: Props) {
     });
   }
 
+  const targetLabel = formatTargetLabel(flow.type, targetDate);
+
   if (showConfirm) {
     return (
       <ConfirmScreen
         flow={flow}
         answers={answers}
+        targetLabel={targetLabel}
         onBack={() => setShowConfirm(false)}
         onSave={handleSave}
         isPending={isPending}
@@ -71,12 +80,21 @@ export function FlowClient({ flow }: Props) {
     <main className="mx-auto max-w-3xl px-4 py-6 sm:py-10">
       <header className="mb-6 flex items-center justify-between gap-3">
         <span className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-700">
-          {flow.label}
+          {flow.label} · {targetLabel}
         </span>
         <span className="text-xs text-zinc-500">{flow.intro}</span>
       </header>
 
       <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8">
+        {step === 0 && (
+          <div className="mb-6">
+            <FlowDateChips
+              type={flow.type}
+              value={targetDate}
+              onChange={setTargetDate}
+            />
+          </div>
+        )}
         <div className="mb-8">
           <div className="mb-3 flex items-center justify-between text-xs font-semibold text-zinc-500">
             <span>
@@ -186,6 +204,7 @@ function QuestionField({
 function ConfirmScreen({
   flow,
   answers,
+  targetLabel,
   onBack,
   onSave,
   isPending,
@@ -193,6 +212,7 @@ function ConfirmScreen({
 }: {
   flow: Flow;
   answers: FlowAnswers;
+  targetLabel: string;
   onBack: () => void;
   onSave: () => void;
   isPending: boolean;
@@ -212,7 +232,7 @@ function ConfirmScreen({
       <section className="rounded-3xl border border-zinc-200 bg-zinc-50 p-5 shadow-sm sm:p-8">
         <p className="text-sm font-semibold text-zinc-500">入力内容の確認</p>
         <h2 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900">
-          {flow.label}
+          {flow.label} · {targetLabel}
         </h2>
         <p className="mt-2 text-sm text-zinc-600">
           保存前に、入力した内容を一覧で確認できます。

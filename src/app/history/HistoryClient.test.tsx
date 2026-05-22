@@ -20,12 +20,14 @@ function record(
   type: RecordRow["type"],
   createdAt: string,
   answers: RecordRow["answers"] = {},
+  targetDate: string | null = null,
 ): RecordRow {
   return {
     id,
     type,
     answers,
     checks: {},
+    target_date: targetDate,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -65,6 +67,28 @@ describe("HistoryClient", () => {
     // 2026-05-20 のセクションに 2 件、2026-05-19 のセクションに 1 件
     expect(within(sections[0]).getAllByRole("article")).toHaveLength(2);
     expect(within(sections[1]).getAllByRole("article")).toHaveLength(1);
+  });
+
+  it("uses target_date for the section heading when it differs from created_at", () => {
+    // 夜 (5/20 22:00 JST = 13:00 UTC) に翌日 (5/21) の morning を書くケース。
+    // grouping は target_date=2026-05-21、見出しも 2026-05-21 と一致するべき。
+    const records: RecordRow[] = [
+      record(
+        "next-day-morning",
+        "morning",
+        "2026-05-20T13:00:00Z", // created_at JST 5/20 22:00
+        { goal: "明日の目標" },
+        "2026-05-21", // target_date は翌日
+      ),
+    ];
+
+    render(<HistoryClient records={records} />);
+
+    // 5/21 のセクションが 1 つだけ存在し、5/20 のセクションは存在しない
+    expect(screen.getByRole("region", { name: /2026年5月21日/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: /2026年5月20日/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("filters by record type", async () => {

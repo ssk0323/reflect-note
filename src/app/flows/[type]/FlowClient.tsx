@@ -46,16 +46,18 @@ export function FlowClient({ flow }: Props) {
   function handleSave() {
     setError(null);
     startTransition(async () => {
+      const genericMessage = "保存に失敗しました。時間をおいて再度お試しください。";
       try {
         const result = await saveFlowRecord(flow.type, answers, targetDate);
         if (result.ok) {
           router.push("/");
         } else {
-          setError(result.error ?? "保存に失敗しました");
+          setError(result.error ?? genericMessage);
         }
       } catch (e) {
-        const message = e instanceof Error ? e.message : "保存に失敗しました";
-        setError(message);
+        // 例外は内部詳細を漏らさず汎用メッセージ。詳細は console.error に。
+        console.error("saveFlowRecord threw", e);
+        setError(genericMessage);
       }
     });
   }

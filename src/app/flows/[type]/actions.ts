@@ -25,6 +25,12 @@ function validateAndNormalizeTargetDate(
   return normalized;
 }
 
+// UI 表示用の汎用エラーメッセージ。Supabase の error.message には RLS / SQL / 列名等の
+// 内部詳細が含まれることがあるので、そのまま画面に出さない。詳細は console.error に
+// 留めて運用ログで追跡する (PR #31 review で指摘あり)。
+const GENERIC_SAVE_ERROR = "保存に失敗しました。時間をおいて再度お試しください。";
+const GENERIC_UPDATE_ERROR = "更新に失敗しました。時間をおいて再度お試しください。";
+
 export async function saveFlowRecord(
   type: FlowType,
   answers: FlowAnswers,
@@ -56,7 +62,8 @@ export async function saveFlowRecord(
   });
 
   if (error) {
-    return { ok: false, error: error.message };
+    console.error("saveFlowRecord insert failed", error);
+    return { ok: false, error: GENERIC_SAVE_ERROR };
   }
 
   // トップの「本日の目標」「今週/今月の目標」は新規 record で即更新したい
@@ -65,13 +72,21 @@ export async function saveFlowRecord(
   return { ok: true };
 }
 
+// id は UUID v4 想定。invalid なら 500 (PostgreSQL の uuid 型キャストエラー) で
+// 内部詳細を漏らさないよう、事前に regex 検証する。
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function updateFlowRecord(
   id: string,
+  type: FlowType,
   answers: FlowAnswers,
   targetDate: string,
 ): Promise<SaveResult> {
-  if (!id) {
+  if (!id || !UUID_REGEX.test(id)) {
     return { ok: false, error: "id が指定されていません" };
+  }
+  if (!FLOW_TYPES.includes(type)) {
+    return { ok: false, error: `不正なフロー種別: ${type}` };
   }
 
   const supabase = await createSupabaseServerClient();
@@ -84,7 +99,7 @@ export async function updateFlowRecord(
   }
 
   // 既存の answers / checks / type / created_at を取得。
-  // - type は target_date 正規化と方向判定に必要
+  // - type は呼び出し側が指定した URL [type] と一致するか検証 (型横断編集の防止)
   // - created_at は direction 判定の基準時刻として使う
   //   (今日「1 週間前の morning」を編集するとき、now=今日 だと future check が
   //    過去日扱いで失敗するため、レコード作成時点を基準にする)
@@ -102,7 +117,11 @@ export async function updateFlowRecord(
     return { ok: false, error: "更新対象の記録が見つかりません" };
   }
 
-  const type = existing.type as FlowType;
+  // URL の [type] と record.type が食い違う編集は拒否 (CSRF / 不正パラメータ防御)。
+  if (existing.type !== type) {
+    return { ok: false, error: "更新対象の記録が見つかりません" };
+  }
+
   const createdAt = new Date(existing.created_at);
   const normalizedTargetDate = validateAndNormalizeTargetDate(
     type,
@@ -123,7 +142,9 @@ export async function updateFlowRecord(
   }
 
   // RLS で user_id = auth.uid() のレコードしか update できない。
-  // 0 行マッチ (RLS / stale id) は .select("id") で検知して error にする。
+  // type 不変・自分のレコードのみを保証するため、where に id + type + user_id を指定。
+  // (RLS の冗長な防御。RLS が無効化されても他人のレコードを書き換えられない。)
+  // 0 行マッチ (RLS / stale id / type 不一致) は .select("id") で検知して error にする。
   const { data, error } = await supabase
     .from("records")
     .update({
@@ -132,10 +153,13 @@ export async function updateFlowRecord(
       target_date: normalizedTargetDate,
     })
     .eq("id", id)
+    .eq("type", type)
+    .eq("user_id", user.id)
     .select("id");
 
   if (error) {
-    return { ok: false, error: error.message };
+    console.error("updateFlowRecord update failed", error);
+    return { ok: false, error: GENERIC_UPDATE_ERROR };
   }
 
   if (!data || data.length === 0) {

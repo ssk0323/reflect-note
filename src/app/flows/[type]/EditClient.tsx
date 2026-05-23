@@ -45,15 +45,25 @@ export function EditClient({
   function handleSave() {
     setError(null);
     startTransition(async () => {
+      const genericMessage = "保存に失敗しました。時間をおいて再度お試しください。";
       try {
-        const result = await updateFlowRecord(recordId, answers, targetDate);
+        // flow.type を渡すことで、サーバ側が URL [type] と record.type の
+        // 整合性を検証できる (型横断編集を防ぐ)。
+        const result = await updateFlowRecord(
+          recordId,
+          flow.type,
+          answers,
+          targetDate,
+        );
         if (result.ok) {
           router.push("/history");
         } else {
-          setError(result.error ?? "保存に失敗しました");
+          setError(result.error ?? genericMessage);
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "保存に失敗しました");
+        // 例外は内部詳細を漏らさず汎用メッセージ。詳細は console.error に。
+        console.error("updateFlowRecord threw", e);
+        setError(genericMessage);
       }
     });
   }

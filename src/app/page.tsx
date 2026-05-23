@@ -89,12 +89,16 @@ async function fetchRecentRecords(
   // 並び順は target_date desc (NULL は最後) → created_at desc。
   // limit(1000) に当たったときに、created_at が古いが target_date が現在/未来の
   // レコードが押し出されないようにするため (Issue #30, PR #31 review より)。
+  // PostgREST の or= 構文では、特殊文字 (`,()`) や `.`、ISO timestamp の `:` を含む
+  // 値はダブルクォートで囲む必要がある。`lookbackStartUtc` (例 `2026-04-17T15:00:00.000Z`)
+  // は `.` `:` を含むため、構文ゆれで誤解釈されないよう quote する。
+  // 参考: https://postgrest.org/en/stable/api.html#operators
   const { data, error } = await supabase
     .from("records")
     .select("id, type, answers, checks, target_date, created_at, updated_at")
     .or(
       `target_date.gte.${lookbackDate},` +
-        `and(target_date.is.null,created_at.gte.${lookbackStartUtc})`,
+        `and(target_date.is.null,created_at.gte."${lookbackStartUtc}")`,
     )
     .order("target_date", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })

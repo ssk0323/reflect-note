@@ -80,6 +80,7 @@ describe("EditClient", () => {
 
     expect(updateFlowRecord).toHaveBeenCalledWith(
       "abc",
+      "morning",
       expect.objectContaining({ goal: "new goal" }),
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     );
@@ -137,6 +138,7 @@ describe("EditClient", () => {
 
     expect(updateFlowRecord).toHaveBeenCalledWith(
       "legacy-1",
+      "morning",
       expect.objectContaining({ goal: "古い目標" }),
       "2026-04-10",
     );
@@ -161,6 +163,7 @@ describe("EditClient", () => {
 
     expect(updateFlowRecord).toHaveBeenCalledWith(
       "legacy-week",
+      "weeklyGoal",
       expect.anything(),
       "2026-05-18",
     );

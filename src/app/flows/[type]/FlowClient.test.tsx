@@ -128,7 +128,10 @@ describe("FlowClient (morning)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   });
 
-  it("shows error message when saveFlowRecord throws", async () => {
+  it("例外時は内部メッセージを画面に出さず汎用メッセージを表示する", async () => {
+    // Security review (PR #31): catch した例外の e.message は画面に出さない。
+    // 詳細は console.error で運用ログに残す。
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     saveFlowRecord.mockRejectedValue(new Error("network down"));
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} />);
@@ -139,7 +142,10 @@ describe("FlowClient (morning)", () => {
     await user.click(screen.getByRole("button", { name: "一覧で確認する" }));
     await user.click(screen.getByRole("button", { name: "保存する" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("network down");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/しばらくしてから再度お試しください|時間をおいて再度お試しください/);
+    expect(alert).not.toHaveTextContent(/network down/);
+    errorSpy.mockRestore();
   });
 });
 

@@ -70,24 +70,28 @@ function safeErrorContext(err: unknown): Record<string, unknown> {
   };
 }
 
-async function requireAuth() {
+type AuthOk = {
+  ok: true;
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
+  user: { id: string };
+};
+type AuthFail = { ok: false; error: string };
+
+/** 認証チェック。`ok: false` のときは error のみを返す (Server Action の戻り値に
+ *  非シリアライズ可能な supabase client が混入しないようにする — Copilot review)。 */
+async function requireAuth(): Promise<AuthOk | AuthFail> {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return {
-      ok: false as const,
-      error: "ログインが必要です",
-      supabase,
-      user: null,
-    };
+    return { ok: false, error: "ログインが必要です" };
   }
-  return { ok: true as const, supabase, user };
+  return { ok: true, supabase, user: { id: user.id } };
 }
 
-/** 同 (user, target_date, bucket) の現在の todo 数を返す。
- *  MAX_TODOS_PER_DAY 上限チェック用。 */
+/** user_id × target_date 単位での todo 件数を返す (bucket は問わない、日全体)。
+ *  MAX_TODOS_PER_DAY (200) 上限チェック用。 */
 async function countTodos(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   userId: string,
@@ -585,12 +589,16 @@ export async function acceptCarryProposal(
   const auth = await requireAuth();
   if (!auth.ok) return auth;
 
-  // 取得: RLS + user_id で他人の id は弾かれる
+  // 取得: RLS + user_id で他人の id は弾かれる。position も取得して
+  // 「昨日の並び」を保ったまま今日に挿入できるようにする (Copilot review)。
   const { data: sources, error: fetchErr } = await auth.supabase
     .from("todos")
-    .select("id, target_date, text, bucket, time, important")
+    .select("id, target_date, text, bucket, time, important, position")
     .in("id", uniqueIds)
-    .eq("user_id", auth.user.id);
+    .eq("user_id", auth.user.id)
+    .order("target_date", { ascending: true })
+    .order("bucket", { ascending: true })
+    .order("position", { ascending: true });
 
   if (fetchErr) {
     console.error("acceptCarryProposal fetch failed", safeErrorContext(fetchErr));
@@ -614,15 +622,9 @@ export async function acceptCarryProposal(
     };
   }
 
-  // 順序を安定化: target_date asc + position asc (元の昨日リスト順を再現)
-  const sorted = sources.slice().sort((a, b) => {
-    if (a.target_date < b.target_date) return -1;
-    if (a.target_date > b.target_date) return 1;
-    return 0;
-  });
-
+  // sources は既に DB 側で (target_date, bucket, position) asc に並んでいる。
   let dupCount = 0;
-  for (const s of sorted) {
+  for (const s of sources) {
     const { error, carryDuplicate } = await tryInsertWithPosition(
       auth.supabase,
       auth.user.id,

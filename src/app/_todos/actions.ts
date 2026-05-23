@@ -30,6 +30,21 @@ function isBucket(v: unknown): v is TodoBucket {
 // 入力テキストの上限。DB 側で制約は無いが、極端な肥大化を防ぐためアプリ層で制限する。
 const MAX_TEXT_LEN = 500;
 
+// DoS / 自リソース枯渇防止のため、1 ユーザー / 1 日 / 1 リクエストの最大件数を制限。
+// (team review P1: target_date client trust + 件数上限なし)
+const MAX_CARRY_BATCH = 50;
+const MAX_TODOS_PER_DAY = 200;
+
+// target_date の許容範囲 (team review P1: '9999-12-31' 等での DB 圧迫を防ぐ)
+const MIN_TARGET_DATE = "2020-01-01";
+const MAX_TARGET_DATE = "2099-12-31";
+
+function isAllowedTargetDate(d: string): boolean {
+  return (
+    isValidDateString(d) && d >= MIN_TARGET_DATE && d <= MAX_TARGET_DATE
+  );
+}
+
 function sanitizeText(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
@@ -37,8 +52,22 @@ function sanitizeText(raw: unknown): string | null {
   return trimmed;
 }
 
+// time HH:MM の厳密な検証 (team review P2: `25:99` が通る regex を厳格化)
 function isValidTime(v: unknown): v is string {
-  return typeof v === "string" && /^\d{2}:\d{2}$/.test(v);
+  return typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+}
+
+/** Supabase の error オブジェクトをログ出力する際に、ユーザー入力テキストや個人情報を
+ *  含むフィールドを除外し、code/hint/コンテキストだけを残す。
+ *  (team review P2: console.error に Supabase エラー (= 入力 text 含む) 素通し) */
+function safeErrorContext(err: unknown): Record<string, unknown> {
+  if (!err || typeof err !== "object") return { error: String(err) };
+  const e = err as { code?: unknown; hint?: unknown; status?: unknown };
+  return {
+    code: typeof e.code === "string" ? e.code : undefined,
+    hint: typeof e.hint === "string" ? e.hint : undefined,
+    status: typeof e.status === "number" ? e.status : undefined,
+  };
 }
 
 async function requireAuth() {
@@ -47,9 +76,29 @@ async function requireAuth() {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return { ok: false as const, error: "ログインが必要です", supabase, user: null };
+    return {
+      ok: false as const,
+      error: "ログインが必要です",
+      supabase,
+      user: null,
+    };
   }
   return { ok: true as const, supabase, user };
+}
+
+/** 同 (user, target_date, bucket) の現在の todo 数を返す。
+ *  MAX_TODOS_PER_DAY 上限チェック用。 */
+async function countTodos(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  targetDate: string,
+): Promise<number> {
+  const { count } = await supabase
+    .from("todos")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("target_date", targetDate);
+  return count ?? 0;
 }
 
 // --------------------------------------------------------------------------
@@ -66,7 +115,7 @@ export async function createTodo(input: {
 }): Promise<TodoResult> {
   const text = sanitizeText(input.text);
   if (!text) return { ok: false, error: "本文を入力してください" };
-  if (!isValidDateString(input.targetDate)) {
+  if (!isAllowedTargetDate(input.targetDate)) {
     return { ok: false, error: "日付が不正です" };
   }
   const bucket: TodoBucket = isBucket(input.bucket) ? input.bucket : "forenoon";
@@ -78,48 +127,89 @@ export async function createTodo(input: {
         : null;
   const important = input.important === true;
   const carryFromDate =
-    input.carryFromDate && isValidDateString(input.carryFromDate)
+    input.carryFromDate && isAllowedTargetDate(input.carryFromDate)
       ? input.carryFromDate
       : null;
 
   const auth = await requireAuth();
   if (!auth.ok) return auth;
 
-  // position は同じ target_date + bucket の最大値 + 1
-  const { data: maxRow, error: maxErr } = await auth.supabase
-    .from("todos")
-    .select("position")
-    .eq("user_id", auth.user.id)
-    .eq("target_date", input.targetDate)
-    .eq("bucket", bucket)
-    .order("position", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (maxErr) {
-    console.error("createTodo position lookup failed", maxErr);
-    return { ok: false, error: GENERIC_ERROR };
+  const existing = await countTodos(auth.supabase, auth.user.id, input.targetDate);
+  if (existing >= MAX_TODOS_PER_DAY) {
+    return {
+      ok: false,
+      error: `1 日 ${MAX_TODOS_PER_DAY} 件まで追加できます`,
+    };
   }
-  const nextPos = (maxRow?.position ?? -1) + 1;
 
-  const { error } = await auth.supabase.from("todos").insert({
-    user_id: auth.user.id,
-    target_date: input.targetDate,
-    text,
+  // position 計算: 同 (user, target_date, bucket) の max + 1。
+  // UNIQUE 制約 (migration 0008) があるので並列衝突時は INSERT が失敗 → リトライで吸収。
+  const { error } = await tryInsertWithPosition(
+    auth.supabase,
+    auth.user.id,
+    input.targetDate,
     bucket,
-    time,
-    important,
-    carry_from_date: carryFromDate,
-    position: nextPos,
-  });
+    {
+      text,
+      time,
+      important,
+      carry_from_date: carryFromDate,
+    },
+  );
 
   if (error) {
-    console.error("createTodo insert failed", error);
+    console.error("createTodo failed", safeErrorContext(error));
     return { ok: false, error: GENERIC_ERROR };
   }
 
   revalidatePath("/");
   return { ok: true };
+}
+
+/** position UNIQUE 違反時に 1 度だけリトライする INSERT ヘルパー。
+ *  並列 INSERT で同じ position を狙ったときは、後者が衝突するので max+1 を取り直す。 */
+async function tryInsertWithPosition(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  targetDate: string,
+  bucket: TodoBucket,
+  fields: {
+    text: string;
+    time: string | null;
+    important: boolean;
+    carry_from_date: string | null;
+  },
+): Promise<{ error: unknown }> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: maxRow, error: maxErr } = await supabase
+      .from("todos")
+      .select("position")
+      .eq("user_id", userId)
+      .eq("target_date", targetDate)
+      .eq("bucket", bucket)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (maxErr) return { error: maxErr };
+    const nextPos = (maxRow?.position ?? -1) + 1;
+
+    const { error } = await supabase.from("todos").insert({
+      user_id: userId,
+      target_date: targetDate,
+      bucket,
+      position: nextPos,
+      text: fields.text,
+      time: fields.time,
+      important: fields.important,
+      carry_from_date: fields.carry_from_date,
+    });
+    if (!error) return { error: null };
+
+    // UNIQUE 違反 (Postgres SQLSTATE 23505) なら attempt をもう一度。
+    const code = (error as { code?: string }).code;
+    if (code !== "23505") return { error };
+  }
+  return { error: new Error("position conflict after retries") };
 }
 
 // --------------------------------------------------------------------------
@@ -159,7 +249,7 @@ export async function updateTodo(
     update.important = patch.important === true;
   }
 
-  if (Object.keys(update).length === 0) return { ok: true }; // no-op
+  if (Object.keys(update).length === 0) return { ok: true };
 
   const { data, error } = await auth.supabase
     .from("todos")
@@ -169,7 +259,7 @@ export async function updateTodo(
     .select("id");
 
   if (error) {
-    console.error("updateTodo failed", error);
+    console.error("updateTodo failed", safeErrorContext(error));
     return { ok: false, error: GENERIC_ERROR };
   }
   if (!data || data.length === 0) {
@@ -204,7 +294,7 @@ export async function toggleTodoDone(
     .select("id");
 
   if (error) {
-    console.error("toggleTodoDone failed", error);
+    console.error("toggleTodoDone failed", safeErrorContext(error));
     return { ok: false, error: GENERIC_ERROR };
   }
   if (!data || data.length === 0) {
@@ -216,7 +306,7 @@ export async function toggleTodoDone(
 }
 
 // --------------------------------------------------------------------------
-// Reorder (move up / down within same target_date)
+// Reorder (move up / down within same (target_date, bucket))
 // --------------------------------------------------------------------------
 
 export async function reorderTodo(
@@ -231,7 +321,6 @@ export async function reorderTodo(
   const auth = await requireAuth();
   if (!auth.ok) return auth;
 
-  // 対象 ToDo の position / target_date / bucket を取得
   const { data: current, error: fetchErr } = await auth.supabase
     .from("todos")
     .select("id, target_date, bucket, position")
@@ -240,48 +329,41 @@ export async function reorderTodo(
     .maybeSingle();
 
   if (fetchErr) {
-    console.error("reorderTodo fetch failed", fetchErr);
+    console.error("reorderTodo fetch failed", safeErrorContext(fetchErr));
     return { ok: false, error: GENERIC_ERROR };
   }
   if (!current) return { ok: false, error: "対象の ToDo が見つかりません" };
 
-  // 同じ target_date + bucket 内で隣の ToDo を探して position を swap
-  const cmp = direction === "up" ? "lt" : "gt";
-  const order = direction === "up" ? false : true; // up: 大きい順で 1 件 / down: 小さい順で 1 件
-  const { data: neighbor, error: nErr } = await auth.supabase
+  // 隣の todo を探す。動的メソッド呼び出しを避け、明示的に分岐 (team review P2)。
+  const baseQuery = auth.supabase
     .from("todos")
     .select("id, position")
     .eq("user_id", auth.user.id)
     .eq("target_date", current.target_date)
-    .eq("bucket", current.bucket)
-    [cmp]("position", current.position)
-    .order("position", { ascending: order })
-    .limit(1)
-    .maybeSingle();
+    .eq("bucket", current.bucket);
+
+  const filteredQuery =
+    direction === "up"
+      ? baseQuery.lt("position", current.position).order("position", { ascending: false })
+      : baseQuery.gt("position", current.position).order("position", { ascending: true });
+
+  const { data: neighbor, error: nErr } = await filteredQuery.limit(1).maybeSingle();
 
   if (nErr) {
-    console.error("reorderTodo neighbor lookup failed", nErr);
+    console.error("reorderTodo neighbor failed", safeErrorContext(nErr));
     return { ok: false, error: GENERIC_ERROR };
   }
-  if (!neighbor) return { ok: true }; // 既に端
+  if (!neighbor) return { ok: true }; // already at edge
 
-  // ATOMIC な swap が理想だが、現状は 2 回 UPDATE で許容 (P2 で RPC 化を検討)
-  const { error: e1 } = await auth.supabase
-    .from("todos")
-    .update({ position: neighbor.position })
-    .eq("id", current.id)
-    .eq("user_id", auth.user.id);
-  if (e1) {
-    console.error("reorderTodo step1 failed", e1);
-    return { ok: false, error: GENERIC_ERROR };
-  }
-  const { error: e2 } = await auth.supabase
-    .from("todos")
-    .update({ position: current.position })
-    .eq("id", neighbor.id)
-    .eq("user_id", auth.user.id);
-  if (e2) {
-    console.error("reorderTodo step2 failed", e2);
+  // Atomic swap via RPC (migration 0008)。
+  // 2 段 UPDATE が途中失敗で position 重複を永続化する問題への根治。
+  const { error: rpcErr } = await auth.supabase.rpc("swap_todo_positions", {
+    id_a: current.id,
+    id_b: neighbor.id,
+  });
+
+  if (rpcErr) {
+    console.error("reorderTodo rpc failed", safeErrorContext(rpcErr));
     return { ok: false, error: GENERIC_ERROR };
   }
 
@@ -307,7 +389,7 @@ export async function deleteTodo(id: string): Promise<TodoResult> {
     .select("id");
 
   if (error) {
-    console.error("deleteTodo failed", error);
+    console.error("deleteTodo failed", safeErrorContext(error));
     return { ok: false, error: GENERIC_ERROR };
   }
   if (!data || data.length === 0) {
@@ -330,7 +412,6 @@ export async function carryTodoToTomorrow(
   const auth = await requireAuth();
   if (!auth.ok) return auth;
 
-  // 対象 ToDo を取得
   const { data: src, error: fetchErr } = await auth.supabase
     .from("todos")
     .select("id, target_date, text, bucket, time, important")
@@ -339,38 +420,60 @@ export async function carryTodoToTomorrow(
     .maybeSingle();
 
   if (fetchErr) {
-    console.error("carryTodoToTomorrow fetch failed", fetchErr);
+    console.error("carryTodoToTomorrow fetch failed", safeErrorContext(fetchErr));
     return { ok: false, error: GENERIC_ERROR };
   }
   if (!src) return { ok: false, error: "対象の ToDo が見つかりません" };
 
   const tomorrow = addDays(src.target_date, 1);
+  if (!isAllowedTargetDate(tomorrow)) {
+    return { ok: false, error: "日付が不正です" };
+  }
 
-  // 翌日の同 bucket の position 最大 +1
-  const { data: maxRow } = await auth.supabase
+  // 冪等性: 同じ (target_date, carry_from_date, text) が既にあれば skip (team review P0)。
+  const { data: existing, error: dupErr } = await auth.supabase
     .from("todos")
-    .select("position")
+    .select("id")
     .eq("user_id", auth.user.id)
     .eq("target_date", tomorrow)
-    .eq("bucket", src.bucket as TodoBucket)
-    .order("position", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const nextPos = (maxRow?.position ?? -1) + 1;
+    .eq("carry_from_date", src.target_date)
+    .eq("text", src.text)
+    .limit(1);
 
-  const { error: insErr } = await auth.supabase.from("todos").insert({
-    user_id: auth.user.id,
-    target_date: tomorrow,
-    text: src.text,
-    bucket: src.bucket as TodoBucket,
-    time: src.time,
-    important: src.important,
-    carry_from_date: src.target_date,
-    position: nextPos,
-  });
+  if (dupErr) {
+    console.error("carryTodoToTomorrow dup check failed", safeErrorContext(dupErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
+  if (existing && existing.length > 0) {
+    // 既に carry 済み。冪等的に success を返す。
+    revalidatePath("/");
+    return { ok: true };
+  }
+
+  // 件数上限チェック
+  const cnt = await countTodos(auth.supabase, auth.user.id, tomorrow);
+  if (cnt >= MAX_TODOS_PER_DAY) {
+    return {
+      ok: false,
+      error: `1 日 ${MAX_TODOS_PER_DAY} 件まで追加できます`,
+    };
+  }
+
+  const { error: insErr } = await tryInsertWithPosition(
+    auth.supabase,
+    auth.user.id,
+    tomorrow,
+    src.bucket as TodoBucket,
+    {
+      text: src.text,
+      time: src.time,
+      important: src.important,
+      carry_from_date: src.target_date,
+    },
+  );
 
   if (insErr) {
-    console.error("carryTodoToTomorrow insert failed", insErr);
+    console.error("carryTodoToTomorrow insert failed", safeErrorContext(insErr));
     return { ok: false, error: GENERIC_ERROR };
   }
 
@@ -379,14 +482,13 @@ export async function carryTodoToTomorrow(
 }
 
 // --------------------------------------------------------------------------
-// Helpers for the page (reading)
+// Read helpers
 // --------------------------------------------------------------------------
 
-/** 今日 (JST) の ToDo を position 順で全件取得。 */
 export async function fetchTodosForDate(
   date: string,
 ): Promise<{ todos: TodoRow[]; error: string | null }> {
-  if (!isValidDateString(date)) {
+  if (!isAllowedTargetDate(date)) {
     return { todos: [], error: "日付が不正です" };
   }
   const auth = await requireAuth();
@@ -400,20 +502,19 @@ export async function fetchTodosForDate(
     .eq("user_id", auth.user.id)
     .eq("target_date", date)
     .order("position", { ascending: true })
-    .limit(200);
+    .limit(MAX_TODOS_PER_DAY);
 
   if (error) {
-    console.error("fetchTodosForDate failed", error);
+    console.error("fetchTodosForDate failed", safeErrorContext(error));
     return { todos: [], error: GENERIC_ERROR };
   }
   return { todos: (data ?? []) as TodoRow[], error: null };
 }
 
-/** 昨日 (JST) の未完了 ToDo を取得 (朝の「引き継ぎ提案」用)。 */
 export async function fetchYesterdayPendingTodos(
   todayDate: string,
 ): Promise<{ todos: TodoRow[]; error: string | null }> {
-  if (!isValidDateString(todayDate)) {
+  if (!isAllowedTargetDate(todayDate)) {
     return { todos: [], error: "日付が不正です" };
   }
   const yesterday = addDays(todayDate, -1);
@@ -428,16 +529,20 @@ export async function fetchYesterdayPendingTodos(
     .eq("user_id", auth.user.id)
     .eq("target_date", yesterday)
     .eq("done", false)
-    .order("position", { ascending: true });
+    .order("position", { ascending: true })
+    .limit(MAX_CARRY_BATCH);
 
   if (error) {
-    console.error("fetchYesterdayPendingTodos failed", error);
+    console.error("fetchYesterdayPendingTodos failed", safeErrorContext(error));
     return { todos: [], error: GENERIC_ERROR };
   }
   return { todos: (data ?? []) as TodoRow[], error: null };
 }
 
-/** 「2 件追加」のように一括で carry を実行する。 */
+// --------------------------------------------------------------------------
+// Accept carry proposal (朝の「N 件を追加」)
+// --------------------------------------------------------------------------
+
 export async function acceptCarryProposal(
   ids: string[],
   todayDate: string,
@@ -445,66 +550,111 @@ export async function acceptCarryProposal(
   if (!Array.isArray(ids) || ids.length === 0) {
     return { ok: false, error: "対象がありません" };
   }
-  if (!ids.every(isUuid)) {
+  if (ids.length > MAX_CARRY_BATCH) {
+    return { ok: false, error: `${MAX_CARRY_BATCH} 件までです` };
+  }
+  // 重複 id を除去 (team review P1: 同じ id を 100 個入れて amplification)
+  const uniqueIds = Array.from(new Set(ids));
+  if (!uniqueIds.every(isUuid)) {
     return { ok: false, error: "id に不正な値があります" };
   }
-  if (!isValidDateString(todayDate)) {
+  if (!isAllowedTargetDate(todayDate)) {
+    return { ok: false, error: "日付が不正です" };
+  }
+  // todayDate がサーバ時計の「今日」と一致するか検証 (任意日への横流しを防ぐ)
+  const serverToday = toJstDateString(new Date());
+  if (todayDate !== serverToday) {
     return { ok: false, error: "日付が不正です" };
   }
 
   const auth = await requireAuth();
   if (!auth.ok) return auth;
 
-  // 元 ToDo を取得 (RLS + user_id で他人のレコードは取れない)
+  // 取得: RLS + user_id で他人の id は弾かれる
   const { data: sources, error: fetchErr } = await auth.supabase
     .from("todos")
     .select("id, target_date, text, bucket, time, important")
-    .in("id", ids)
+    .in("id", uniqueIds)
     .eq("user_id", auth.user.id);
 
   if (fetchErr) {
-    console.error("acceptCarryProposal fetch failed", fetchErr);
+    console.error("acceptCarryProposal fetch failed", safeErrorContext(fetchErr));
     return { ok: false, error: GENERIC_ERROR };
   }
-
   if (!sources || sources.length === 0) {
     return { ok: false, error: "対象の ToDo が見つかりません" };
   }
 
-  // 全部 forenoon に流し込み、position は連番。重複防止のため
-  // target_date + carry_from_date でユニークチェックは省略 (再実行で重複し得る点は UX 上 OK)。
-  const { data: maxRow } = await auth.supabase
+  // 既に carry 済みのものを除外 (冪等性: 同じ提案を 2 回 accept しても重複しない)
+  const { data: alreadyCarried } = await auth.supabase
     .from("todos")
-    .select("position")
+    .select("carry_from_date, text")
     .eq("user_id", auth.user.id)
     .eq("target_date", todayDate)
-    .order("position", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  let pos = (maxRow?.position ?? -1) + 1;
+    .in(
+      "carry_from_date",
+      Array.from(new Set(sources.map((s) => s.target_date))),
+    );
 
-  const inserts = sources.map((s) => ({
-    user_id: auth.user.id,
-    target_date: todayDate,
-    text: s.text,
-    bucket: (s.bucket as TodoBucket) ?? "forenoon",
-    time: s.time,
-    important: s.important,
-    carry_from_date: s.target_date,
-    position: pos++,
-  }));
+  const carriedKey = new Set(
+    (alreadyCarried ?? []).map(
+      (r) => `${r.carry_from_date}::${r.text}`,
+    ),
+  );
+  const toInsert = sources.filter(
+    (s) => !carriedKey.has(`${s.target_date}::${s.text}`),
+  );
 
-  const { error: insErr } = await auth.supabase.from("todos").insert(inserts);
-  if (insErr) {
-    console.error("acceptCarryProposal insert failed", insErr);
-    return { ok: false, error: GENERIC_ERROR };
+  if (toInsert.length === 0) {
+    // 全部既に carry 済み。冪等成功。
+    revalidatePath("/");
+    return { ok: true };
+  }
+
+  // 件数上限
+  const cnt = await countTodos(auth.supabase, auth.user.id, todayDate);
+  if (cnt + toInsert.length > MAX_TODOS_PER_DAY) {
+    return {
+      ok: false,
+      error: `1 日 ${MAX_TODOS_PER_DAY} 件を超えるため取り込めません`,
+    };
+  }
+
+  // bucket-aware に 1 件ずつ insert (UNIQUE 制約 + max+1 retry でレース耐性)。
+  // 順序は元の position 順。
+  toInsert.sort((a, b) => {
+    if (a.target_date < b.target_date) return -1;
+    if (a.target_date > b.target_date) return 1;
+    return 0;
+  });
+
+  for (const s of toInsert) {
+    const { error } = await tryInsertWithPosition(
+      auth.supabase,
+      auth.user.id,
+      todayDate,
+      s.bucket as TodoBucket,
+      {
+        text: s.text,
+        time: s.time,
+        important: s.important,
+        carry_from_date: s.target_date,
+      },
+    );
+    if (error) {
+      console.error("acceptCarryProposal insert failed", safeErrorContext(error));
+      return { ok: false, error: GENERIC_ERROR };
+    }
   }
 
   revalidatePath("/");
   return { ok: true };
 }
 
-// today の JST 日付を返すヘルパー (page.tsx から取り回しやすいよう server 側に置く)
+// --------------------------------------------------------------------------
+// Public helper
+// --------------------------------------------------------------------------
+
 export async function getTodayJstDate(): Promise<string> {
   return toJstDateString(new Date());
 }

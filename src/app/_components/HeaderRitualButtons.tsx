@@ -6,9 +6,7 @@ type RitualState = {
   kind: RitualKind;
   done: boolean;
   active: boolean;
-  /** done=true のときの表示時刻 (HH:MM)。任意。 */
   doneTime?: string;
-  /** クリック先のフロー */
   href: string;
 };
 
@@ -22,12 +20,13 @@ const META: Record<
   monthReview: { glyph: "月", short: "月", title: "月の振り返り" },
 };
 
+/** Header に配置する儀式ボタン (朝/夜/週/月) のグループ。
+ *  short ラベルは CSS の `hidden sm:inline` でモバイルでは glyph のみ表示
+ *  (mobile prop に依存せず CSS でレスポンシブに切り替える)。 */
 export function HeaderRitualButtons({
   rituals,
-  mobile = false,
 }: {
   rituals: RitualState[];
-  mobile?: boolean;
 }) {
   return (
     <div
@@ -36,20 +35,13 @@ export function HeaderRitualButtons({
       className="flex items-center gap-1.5 flex-wrap"
     >
       {rituals.map((r) => (
-        <RitualButton key={r.kind} {...r} mobile={mobile} />
+        <RitualButton key={r.kind} {...r} />
       ))}
     </div>
   );
 }
 
-function RitualButton({
-  kind,
-  done,
-  active,
-  doneTime,
-  href,
-  mobile,
-}: RitualState & { mobile: boolean }) {
+function RitualButton({ kind, done, active, doneTime, href }: RitualState) {
   const meta = META[kind];
 
   return (
@@ -58,7 +50,8 @@ function RitualButton({
       aria-label={`${meta.title}${active ? "・今やる時間です" : done ? "・完了済" : ""}`}
       className="relative inline-flex items-center gap-1.5"
       style={{
-        padding: mobile ? "4px 8px" : "5px 10px",
+        padding: "5px 10px",
+        minHeight: 36,
         background: active
           ? "var(--color-accent-soft)"
           : done
@@ -67,7 +60,7 @@ function RitualButton({
         border: `1.4px solid ${active ? "var(--color-accent)" : "var(--color-line)"}`,
         borderRadius: "10px 13px 9px 12px / 10px 9px 13px 10px",
         fontFamily: "var(--font-sans), sans-serif",
-        fontSize: mobile ? 13 : 14,
+        fontSize: 14,
         color: "var(--color-ink)",
         textDecoration: "none",
       }}
@@ -80,35 +73,42 @@ function RitualButton({
             : done
               ? "var(--color-ink-3)"
               : "var(--color-ink-2)",
-          fontSize: mobile ? 14 : 16,
+          fontSize: 16,
           lineHeight: 1,
         }}
       >
         {meta.glyph}
       </span>
-      {!mobile && (
-        <span
-          style={{
-            fontWeight: 700,
-            color: active
-              ? "var(--color-accent)"
-              : done
-                ? "var(--color-ink-3)"
-                : "var(--color-ink-2)",
-            lineHeight: 1,
-          }}
-        >
-          {meta.short}
-        </span>
-      )}
+      {/* short label はモバイルでは非表示 (glyph + aria-label で十分) */}
+      <span
+        className="hidden sm:inline"
+        style={{
+          fontWeight: 700,
+          color: active
+            ? "var(--color-accent)"
+            : done
+              ? "var(--color-ink-3)"
+              : "var(--color-ink-2)",
+          lineHeight: 1,
+        }}
+      >
+        {meta.short}
+      </span>
       <span
         className="sk-mono"
         style={{
           color: active ? "var(--color-accent)" : "var(--color-ink-3)",
-          fontSize: mobile ? 9 : 10,
+          fontSize: 10,
         }}
       >
-        {done ? `✓${!mobile && doneTime ? ` ${doneTime}` : ""}` : "→"}
+        {done ? (
+          <>
+            ✓
+            {doneTime && <span className="hidden sm:inline"> {doneTime}</span>}
+          </>
+        ) : (
+          "→"
+        )}
       </span>
       {active && (
         <span

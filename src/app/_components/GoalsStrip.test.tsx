@@ -7,6 +7,10 @@ vi.mock("@/app/actions", () => ({
   toggleCheck: vi.fn().mockResolvedValue({ ok: true, checked: true }),
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 function rec(
   overrides: Partial<RecordRow> & {
     answers?: Record<string, string>;

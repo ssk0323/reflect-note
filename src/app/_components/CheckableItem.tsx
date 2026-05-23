@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toggleCheck } from "@/app/actions";
 
 type Props = {
@@ -19,7 +20,16 @@ export function CheckableItem({
   initialChecked,
   sublabel,
 }: Props) {
+  const router = useRouter();
   const [checked, setChecked] = useState(initialChecked);
+  // 前回の props を覚えておき、render 中に props が変わっていれば state を同期する。
+  // (React 公式推奨パターン: "Storing information from previous renders"。
+  //  useEffect で setState する形式は react-hooks/set-state-in-effect で警告される。)
+  const [prevInitial, setPrevInitial] = useState(initialChecked);
+  if (initialChecked !== prevInitial) {
+    setPrevInitial(initialChecked);
+    setChecked(initialChecked);
+  }
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const inputId = `${recordId}-${fieldKey}`;
@@ -38,10 +48,13 @@ export function CheckableItem({
           setError(result.error ?? "保存に失敗しました");
         } else {
           setChecked(result.checked);
+          // 集計 (GoalsStrip のカウンタ) を更新するため refresh
+          router.refresh();
         }
       } catch (e) {
         setChecked(previous);
-        setError(e instanceof Error ? e.message : "保存に失敗しました");
+        console.error("toggleCheck threw", e);
+        setError("保存に失敗しました");
       }
     });
   }

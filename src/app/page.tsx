@@ -14,6 +14,7 @@ import {
 import {
   addDays,
   addMonths,
+  diffDays,
   resolveRecordDate,
   startOfJstMonth,
   startOfJstWeek,
@@ -79,32 +80,33 @@ async function fetchRecentRecords(
   return { records: (data ?? []) as RecordRow[], error: null };
 }
 
-function pickGreeting(now: Date): string {
-  const hourJst = Number(
+/** JST 時刻を 0-23 の数値で返す。 */
+function getJstHour(now: Date): number {
+  return Number(
     new Intl.DateTimeFormat("en-US", {
       timeZone: "Asia/Tokyo",
       hour: "2-digit",
       hour12: false,
     }).format(now),
   );
-  if (hourJst < 5) return "おやすみなさい";
-  if (hourJst < 11) return "おはようございます";
-  if (hourJst < 17) return "こんにちは";
+}
+
+/** 挨拶と時間帯を 1 つの hour 基準で揃える (team review P1: 境界不整合)。
+ *  - 04:00-10:59 → 朝モード / "おはようございます"
+ *  - 11:00-16:59 → 昼モード / "こんにちは"
+ *  - 17:00-03:59 → 夜モード / "こんばんは" (04:00 未満は前夜扱い) */
+function pickGreeting(now: Date): string {
+  const h = getJstHour(now);
+  if (h >= 4 && h < 11) return "おはようございます";
+  if (h >= 11 && h < 17) return "こんにちは";
   return "こんばんは";
 }
 
-/** 今が「朝/昼/夜」のどれか。儀式ボタンの active highlight に使う。 */
 function pickTimeOfDay(now: Date): "morning" | "day" | "evening" {
-  const hourJst = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Tokyo",
-      hour: "2-digit",
-      hour12: false,
-    }).format(now),
-  );
-  if (hourJst >= 4 && hourJst < 11) return "morning";
-  if (hourJst >= 17 || hourJst < 4) return "evening";
-  return "day";
+  const h = getJstHour(now);
+  if (h >= 4 && h < 11) return "morning";
+  if (h >= 11 && h < 17) return "day";
+  return "evening";
 }
 
 const dateMetaFormatter = new Intl.DateTimeFormat("ja-JP", {
@@ -121,13 +123,35 @@ const todayLabelFormatter = new Intl.DateTimeFormat("ja-JP", {
   weekday: "short",
 });
 
-const yesterdayMetaFormatter = new Intl.DateTimeFormat("ja-JP", {
+// 通常は "5/20 23:14"。ただし year またぎ (今年と作成年が違う) の場合は
+// "2025/12/31 23:14" のように年を表示する。
+const yesterdayMetaSameYearFormatter = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   month: "numeric",
   day: "numeric",
   hour: "2-digit",
   minute: "2-digit",
 });
+const yesterdayMetaCrossYearFormatter = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const yearJstFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+});
+function formatYesterdayMeta(created: Date, now: Date): string {
+  const createdYear = yearJstFormatter.format(created);
+  const nowYear = yearJstFormatter.format(now);
+  return (createdYear === nowYear
+    ? yesterdayMetaSameYearFormatter
+    : yesterdayMetaCrossYearFormatter
+  ).format(created);
+}
 
 export default async function Home() {
   const supabase = await createSupabaseServerClient();
@@ -249,30 +273,24 @@ export default async function Home() {
   const weekRangeLabel = `${formatJstShortDate(weekStartDate)} → ${formatJstShortDate(weekSundayDate)}`;
   const monthLabel = formatJstMonth(new Date(`${monthStart}T00:00:00+09:00`));
 
-  // 残り日数 / 残り日数文言
-  const daysToWeekEnd = Math.max(
-    0,
-    Math.ceil(
-      (Date.parse(`${weekEndExclusive}T00:00:00+09:00`) - now.getTime()) /
-        (24 * 60 * 60 * 1000),
-    ),
-  );
-  const daysToMonthEnd = Math.max(
-    0,
-    Math.ceil(
-      (Date.parse(`${monthEndExclusive}T00:00:00+09:00`) - now.getTime()) /
-        (24 * 60 * 60 * 1000),
-    ),
-  );
+  // 残り日数: 日付ベースで安定した計算 (team review P1: Math.ceil の時刻依存を排除)。
+  // 「今日含む」定義: 日曜日に「残り 1 日」と出す = diffDays(end, today)。
+  // 月曜表示なら 7 日、土曜なら 2 日、日曜なら 1 日。
+  const daysToWeekEnd = Math.max(0, diffDays(weekEndExclusive, todayKey));
+  const daysToMonthEnd = Math.max(0, diffDays(monthEndExclusive, todayKey));
 
   // 昨日からのメッセージ
   const yesterdayMessage =
     yesterdayNight?.answers.messageToTomorrowSelf?.trim() ?? "";
   const yesterdayMeta = yesterdayNight
-    ? yesterdayMetaFormatter.format(new Date(yesterdayNight.created_at))
+    ? formatYesterdayMeta(new Date(yesterdayNight.created_at), now)
     : "";
+  // team review P1: ラベル「全文」に対応する遷移先は「閲覧」が自然なので、
+  // 履歴の該当日にジャンプする。yesterdayHref が無いケースは /history トップ。
   const yesterdayHref = yesterdayNight
-    ? `/flows/night?edit=${yesterdayNight.id}`
+    ? `/history?year=${new Date(yesterdayNight.created_at)
+        .toLocaleDateString("en-US", { timeZone: "Asia/Tokyo", year: "numeric" })
+        }`
     : "/history";
 
   return (

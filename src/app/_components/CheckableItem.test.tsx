@@ -4,14 +4,20 @@ import userEvent from "@testing-library/user-event";
 import { CheckableItem } from "./CheckableItem";
 
 const toggleCheck = vi.fn();
+const refresh = vi.fn();
 
 vi.mock("@/app/actions", () => ({
   toggleCheck: (...args: unknown[]) => toggleCheck(...args),
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh }),
+}));
+
 describe("CheckableItem", () => {
   beforeEach(() => {
     toggleCheck.mockReset();
+    refresh.mockReset();
   });
 
   it("renders the text and checkbox in the unchecked state", () => {

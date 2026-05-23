@@ -164,7 +164,7 @@ export default async function Home() {
   const lookbackStartUtc = getJstDayBoundsUtc(lookbackShifted).start;
   const lookbackDate = toJstDateString(lookbackShifted);
 
-  const { records: recentRecords } = await fetchRecentRecords(
+  const { records: recentRecords, error: recentError } = await fetchRecentRecords(
     supabase,
     lookbackDate,
     lookbackStartUtc,
@@ -216,12 +216,19 @@ export default async function Home() {
   );
 
   // ToDo: 今日のリスト + 昨日の未完了 (朝の時間帯のみ提案表示)
-  const { todos } = await fetchTodosForDate(todayKey);
+  const { todos, error: todosError } = await fetchTodosForDate(todayKey);
   const timeOfDay = pickTimeOfDay(now);
-  const { todos: yesterdayPending } =
+  const { todos: yesterdayPending, error: yesterdayPendingError } =
     timeOfDay === "morning"
       ? await fetchYesterdayPendingTodos(todayKey)
-      : { todos: [] };
+      : { todos: [], error: null };
+
+  // データ取得エラーをまとめて UI に出すための集約。サイレント空表示は
+  // 「データが無いのか / 取得に失敗したのか」をユーザーが区別できないため避ける
+  // (Copilot review round 4)。
+  const dataErrors = [recentError, todosError, yesterdayPendingError].filter(
+    (e): e is string => typeof e === "string" && e.length > 0,
+  );
 
   const greeting = pickGreeting(now);
   const dateMeta = dateMetaFormatter.format(now);
@@ -340,6 +347,20 @@ export default async function Home() {
           </Link>
         </div>
       </header>
+
+      {/* データ取得エラーがあればユーザーに通知 (サイレント空表示を避ける)。 */}
+      {dataErrors.length > 0 && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="sk-card sk-card-dashed mb-4"
+          style={{ padding: 12 }}
+        >
+          <p className="sk-mono" style={{ color: "var(--color-warn)" }}>
+            ⚠️ データの読み込みに一部失敗しました。時間をおいて再読み込みしてください。
+          </p>
+        </div>
+      )}
 
       {/* 昨日からのメッセージ */}
       <YesterdayMessage

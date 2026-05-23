@@ -27,7 +27,9 @@ function isBucket(v: unknown): v is TodoBucket {
   return typeof v === "string" && TODO_BUCKETS.includes(v as TodoBucket);
 }
 
-// 入力テキストの上限。DB 側で制約は無いが、極端な肥大化を防ぐためアプリ層で制限する。
+// 入力テキストの上限。DB 側にも CHECK 制約 (`todos_text_length_check`, 0009)
+// があるが、UX のため (Supabase の 23514 エラーをそのまま投げない) アプリ層でも
+// 同じ閾値で弾く。両者を同期して変更すること。
 const MAX_TEXT_LEN = 500;
 
 // DoS / 自リソース枯渇防止のため、1 ユーザー / 1 日 / 1 リクエストの最大件数を制限。
@@ -123,12 +125,16 @@ export async function createTodo(input: {
     return { ok: false, error: "日付が不正です" };
   }
   const bucket: TodoBucket = isBucket(input.bucket) ? input.bucket : "forenoon";
-  const time =
-    input.time === null || input.time === undefined
-      ? null
-      : isValidTime(input.time)
-        ? input.time
-        : null;
+  // time は null/undefined なら NULL、それ以外は形式検証してエラーにする。
+  // updateTodo と挙動を揃える (Copilot review: silent null は誤入力に気づけない)。
+  let time: string | null;
+  if (input.time === null || input.time === undefined) {
+    time = null;
+  } else if (isValidTime(input.time)) {
+    time = input.time;
+  } else {
+    return { ok: false, error: "時刻が不正です" };
+  }
   const important = input.important === true;
   const carryFromDate =
     input.carryFromDate && isAllowedTargetDate(input.carryFromDate)

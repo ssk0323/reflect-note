@@ -53,7 +53,10 @@ export function CheckableItem({
         }
       } catch (e) {
         setChecked(previous);
-        console.error("toggleCheck threw", e);
+        // client log には Error の name のみ。Sentry 等への集約時にユーザー入力 (text 等)
+        // が漏れる経路を絶つ (TodoCard の redactClientError と同じ方針)。
+        const errName = e instanceof Error ? e.name : typeof e;
+        console.error("toggleCheck threw", { name: errName });
         setError("保存に失敗しました");
       }
     });

@@ -8,12 +8,18 @@ import {
 import type { RecordRow } from "./types";
 import type { FlowType } from "@/lib/flows";
 
-function r(id: string, type: FlowType, createdAt: string): RecordRow {
+function r(
+  id: string,
+  type: FlowType,
+  createdAt: string,
+  targetDate: string | null = null,
+): RecordRow {
   return {
     id,
     type,
     answers: {},
     checks: {},
+    target_date: targetDate,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -22,6 +28,18 @@ function r(id: string, type: FlowType, createdAt: string): RecordRow {
 describe("historyAggregates / countByDate", () => {
   it("集計が空のときは空 Map を返す", () => {
     expect(countByDate([])).toEqual(new Map());
+  });
+
+  it("target_date が優先される (PR #31 統合)", () => {
+    const records = [
+      // 5/20 (UTC) に書いた morning だが target_date は 5/22
+      r("a", "morning", "2026-05-20T03:00:00Z", "2026-05-22"),
+      // 5/22 (UTC) に書いた morning。target_date null (旧データ)
+      r("b", "morning", "2026-05-22T03:00:00Z"),
+    ];
+    const map = countByDate(records);
+    expect(map.get("2026-05-22")).toBe(2);
+    expect(map.get("2026-05-20")).toBeUndefined();
   });
 
   it("同じ JST 日付の record を合算する", () => {

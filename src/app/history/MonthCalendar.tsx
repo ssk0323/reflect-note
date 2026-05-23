@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import type { FlowType } from "@/lib/flows";
 
 type Props = {
@@ -20,6 +21,8 @@ type Props = {
 };
 
 const WEEKDAY_HEADERS = ["月", "火", "水", "木", "金", "土", "日"];
+
+type DayCellEntry = { day: number; dateKey: string };
 
 export function MonthCalendar({
   year,
@@ -45,10 +48,74 @@ export function MonthCalendar({
   }
   while (cells.length % 7 !== 0) cells.push({ day: null, dateKey: null });
 
+  // roving tabindex 用: 当月の全日を配列にし、矢印キーで±1 / ±7 移動できるようにする。
+  // (WAI-ARIA grid pattern + Codex review PR #33 で指摘あり)
+  const days: DayCellEntry[] = cells.flatMap((c) =>
+    c.day != null && c.dateKey != null ? [{ day: c.day, dateKey: c.dateKey }] : [],
+  );
+
+  // 行ごとに分割 (role="row" 直下に gridcell を入れる WAI-ARIA 構造)
+  const rows: Cell[][] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    rows.push(cells.slice(i, i + 7));
+  }
+
+  // roving tabindex の基準日。選択中があればそれ、なければ今日 (当月) または 1 日。
+  const focusableDate = (() => {
+    if (selectedDate && days.some((d) => d.dateKey === selectedDate)) return selectedDate;
+    if (days.some((d) => d.dateKey === todayDate)) return todayDate;
+    return days[0]?.dateKey ?? null;
+  })();
+
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  function focusByDate(targetKey: string) {
+    const el = gridRef.current?.querySelector<HTMLButtonElement>(
+      `button[data-datekey="${targetKey}"]`,
+    );
+    if (el) el.focus();
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, dateKey: string) {
+    const idx = days.findIndex((d) => d.dateKey === dateKey);
+    if (idx < 0) return;
+    let nextIdx: number | null = null;
+    switch (e.key) {
+      case "ArrowLeft":
+        nextIdx = idx - 1;
+        break;
+      case "ArrowRight":
+        nextIdx = idx + 1;
+        break;
+      case "ArrowUp":
+        nextIdx = idx - 7;
+        break;
+      case "ArrowDown":
+        nextIdx = idx + 7;
+        break;
+      case "Home":
+        // 週頭 (月曜) に移動
+        nextIdx = idx - (idx % 7);
+        break;
+      case "End":
+        // 週末 (日曜) に移動
+        nextIdx = idx + (6 - (idx % 7));
+        break;
+      default:
+        return;
+    }
+    if (nextIdx == null) return;
+    e.preventDefault();
+    if (nextIdx < 0 || nextIdx >= days.length) return;
+    const targetKey = days[nextIdx].dateKey;
+    onSelectDate(targetKey);
+    focusByDate(targetKey);
+  }
+
   return (
     <div>
       <div
-        role="presentation"
+        role="row"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(7, 1fr)",
@@ -59,6 +126,7 @@ export function MonthCalendar({
         {WEEKDAY_HEADERS.map((h) => (
           <span
             key={h}
+            role="columnheader"
             className="sk-mono"
             style={{ textAlign: "center", fontSize: 10 }}
           >
@@ -67,26 +135,48 @@ export function MonthCalendar({
         ))}
       </div>
       <div
+        ref={gridRef}
         role="grid"
         aria-label={`${year}年${month}月のカレンダー`}
-        style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}
+        style={{ display: "grid", gap: 6 }}
       >
-        {cells.map((c, i) =>
-          c.day == null || c.dateKey == null ? (
-            <div key={`blank-${i}`} aria-hidden style={{ aspectRatio: "1" }} />
-          ) : (
-            <DayCell
-              key={c.dateKey}
-              day={c.day}
-              dateKey={c.dateKey}
-              isSelected={selectedDate === c.dateKey}
-              isToday={todayDate === c.dateKey}
-              types={typesByDate.get(c.dateKey) ?? new Set()}
-              recordCount={countsByDate.get(c.dateKey) ?? 0}
-              onSelect={onSelectDate}
-            />
-          ),
-        )}
+        {rows.map((row, rowIdx) => (
+          <div
+            key={`row-${rowIdx}`}
+            role="row"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(7, 1fr)",
+              gap: 6,
+            }}
+          >
+            {row.map((c, colIdx) =>
+              c.day == null || c.dateKey == null ? (
+                // 月外の空 cell。role="gridcell" を残しつつ aria-hidden で SR の
+                // ナビ対象から外す (グリッド構造の整合のため空ではあるが cell として残す)。
+                <div
+                  key={`blank-${rowIdx}-${colIdx}`}
+                  role="gridcell"
+                  aria-hidden
+                  style={{ aspectRatio: "1" }}
+                />
+              ) : (
+                <DayCell
+                  key={c.dateKey}
+                  day={c.day}
+                  dateKey={c.dateKey}
+                  isSelected={selectedDate === c.dateKey}
+                  isToday={todayDate === c.dateKey}
+                  isFocusable={c.dateKey === focusableDate}
+                  types={typesByDate.get(c.dateKey) ?? new Set()}
+                  recordCount={countsByDate.get(c.dateKey) ?? 0}
+                  onSelect={onSelectDate}
+                  onKeyDown={handleKeyDown}
+                />
+              ),
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -97,25 +187,36 @@ function DayCell({
   dateKey,
   isSelected,
   isToday,
+  isFocusable,
   types,
   recordCount,
   onSelect,
+  onKeyDown,
 }: {
   day: number;
   dateKey: string;
   isSelected: boolean;
   isToday: boolean;
+  isFocusable: boolean;
   types: Set<FlowType>;
   recordCount: number;
   onSelect: (date: string) => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>, dateKey: string) => void;
 }) {
+  // セル内に widget (button) が 1 つだけなので、WAI-ARIA 仕様で許される
+  // 「focusable な button 自体に role="gridcell" を持たせる」パターンを採用。
+  // テストが getByRole("gridcell", { name: ... }) で button を見つけられるよう、
+  // aria-label をボタンに付与する。
   return (
     <button
       type="button"
       role="gridcell"
+      data-datekey={dateKey}
       aria-selected={isSelected}
       aria-label={`${day}日${recordCount > 0 ? ` ・ ${recordCount}件の記録` : ""}${isToday ? " (今日)" : ""}`}
+      tabIndex={isFocusable ? 0 : -1}
       onClick={() => onSelect(dateKey)}
+      onKeyDown={(e) => onKeyDown(e, dateKey)}
       className="relative cursor-pointer text-left"
       style={{
         aspectRatio: "1",
@@ -131,42 +232,42 @@ function DayCell({
         fontSize: 14,
       }}
     >
-      <span style={{ fontWeight: isToday ? 700 : 400, opacity: isSelected ? 1 : 0.9 }}>
-        {day}
-      </span>
-      <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-        {Array.from(types).map((t) => (
-          <span
-            key={t}
-            aria-hidden
-            style={{
-              width: 5,
-              height: 5,
-              borderRadius: "50%",
-              background: isSelected ? "var(--color-bg)" : dotColor(t),
-            }}
-          />
-        ))}
-      </div>
-      {isToday && !isSelected && (
-        <span
-          aria-hidden
-          className="sk-mono"
-          style={{
-            position: "absolute",
-            top: -6,
-            right: -6,
-            background: "var(--color-accent)",
-            color: "white",
-            padding: "1px 5px",
-            borderRadius: 6,
-            fontSize: 8,
-          }}
-        >
-          今日
+        <span style={{ fontWeight: isToday ? 700 : 400, opacity: isSelected ? 1 : 0.9 }}>
+          {day}
         </span>
-      )}
-    </button>
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+          {Array.from(types).map((t) => (
+            <span
+              key={t}
+              aria-hidden
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background: isSelected ? "var(--color-bg)" : dotColor(t),
+              }}
+            />
+          ))}
+        </div>
+        {isToday && !isSelected && (
+          <span
+            aria-hidden
+            className="sk-mono"
+            style={{
+              position: "absolute",
+              top: -6,
+              right: -6,
+              background: "var(--color-accent)",
+              color: "white",
+              padding: "1px 5px",
+              borderRadius: 6,
+              fontSize: 8,
+            }}
+          >
+            今日
+          </span>
+        )}
+      </button>
   );
 }
 

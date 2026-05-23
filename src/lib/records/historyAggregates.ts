@@ -1,16 +1,16 @@
 import type { RecordRow } from "./types";
 import type { FlowType } from "@/lib/flows";
-import { toJstDateKey } from "./group";
+import { resolveRecordDate } from "./group";
 
 /** 履歴ページのヒートマップ・フィルタバッジ用の集計ヘルパー。
- *  date の決め方は groupRecordsByDate と同じ (JST の暦日)。
- *  日付キー生成は @/lib/records/group#toJstDateKey に集約済み。 */
+ *  date の決め方は groupRecordsByDate と同じ: target_date があれば優先、
+ *  なければ created_at の JST 日付。日付キー生成は group.ts に集約済み。 */
 
 /** records を JST 日付ごとの件数 Map に集計。ヒートマップに使う。 */
 export function countByDate(records: RecordRow[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const r of records) {
-    const key = toJstDateKey(r.created_at);
+    const key = resolveRecordDate(r);
     map.set(key, (map.get(key) ?? 0) + 1);
   }
   return map;
@@ -21,7 +21,7 @@ export function countByDate(records: RecordRow[]): Map<string, number> {
 export function typesByDate(records: RecordRow[]): Map<string, Set<FlowType>> {
   const map = new Map<string, Set<FlowType>>();
   for (const r of records) {
-    const key = toJstDateKey(r.created_at);
+    const key = resolveRecordDate(r);
     const set = map.get(key);
     if (set) {
       set.add(r.type);

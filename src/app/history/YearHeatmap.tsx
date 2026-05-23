@@ -61,12 +61,22 @@ export function YearHeatmap({ year, countsByDate }: Props) {
     }
   }
 
+  // SR 用にヒートマップの全体サマリを aria-label として要約する。
+  // 個別 cell は <title> ベースでマウスホバーのみ参照可能なので、
+  // 視覚的でない読者が「年全体の記録量」を把握できるよう数値を入れる。
+  // (team review PR #33 で「Heatmap が SR で読めない」指摘あり)
+  let totalRecords = 0;
+  let activeDays = 0;
+  for (const count of countsByDate.values()) {
+    if (count > 0) {
+      activeDays += 1;
+      totalRecords += count;
+    }
+  }
+  const ariaSummary = `${year}年の記録ヒートマップ。記録のある日 ${activeDays}日、合計 ${totalRecords}件`;
+
   return (
-    <div
-      role="img"
-      aria-label={`${year}年の記録ヒートマップ`}
-      className="overflow-x-auto"
-    >
+    <div role="img" aria-label={ariaSummary} className="overflow-x-auto">
       {/* Month labels above the grid */}
       <div
         style={{

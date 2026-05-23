@@ -20,12 +20,14 @@ function record(
   type: RecordRow["type"],
   createdAt: string,
   answers: RecordRow["answers"] = {},
+  targetDate: string | null = null,
 ): RecordRow {
   return {
     id,
     type,
     answers,
     checks: {},
+    target_date: targetDate,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -270,5 +272,46 @@ describe("HistoryClient", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(deleteRecord).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  it("Calendar: 矢印キーで日付セル間を移動できる (a11y キーボードナビ)", async () => {
+    // Team review PR #33 P0: WAI-ARIA grid pattern の矢印キー操作の回帰防止
+    const user = userEvent.setup();
+    // EmptyState 回避のため最低 1 件用意
+    const records = [record("a", "morning", "2026-05-20T03:00:00Z")];
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    // 初期フォーカス対象 (= 今日 5/21) にタブで到達
+    const todayCell = screen.getByRole("gridcell", { name: /21日/ });
+    todayCell.focus();
+    expect(todayCell).toHaveFocus();
+
+    // ArrowRight → 5/22 (金)
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("gridcell", { name: /22日/ })).toHaveFocus();
+
+    // ArrowDown → +7 日 = 5/29
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("gridcell", { name: /29日/ })).toHaveFocus();
+
+    // ArrowUp → -7 日 = 5/22
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("gridcell", { name: /22日/ })).toHaveFocus();
+
+    // ArrowLeft → 5/21
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("gridcell", { name: /21日/ })).toHaveFocus();
+  });
+
+  it("Calendar: roving tabindex で初期フォーカス対象は 1 つだけ", () => {
+    // 当月の日付セルのうち tabIndex=0 は選択中の 1 つだけ
+    const records = [record("a", "morning", "2026-05-20T03:00:00Z")];
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+
+    const cells = screen.getAllByRole("gridcell");
+    const focusable = cells.filter((c) => c.getAttribute("tabindex") === "0");
+    expect(focusable).toHaveLength(1);
+    // デフォルトでは今日 (5/21) が focusable
+    expect(focusable[0].getAttribute("aria-label")).toMatch(/21日.*今日/);
   });
 });

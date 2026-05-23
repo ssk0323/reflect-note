@@ -38,13 +38,23 @@ export default async function HistoryPage({ searchParams }: PageProps) {
   const yearEndUtc = new Date(
     Date.UTC(year + 1, 0, 1) - 9 * 60 * 60 * 1000,
   ).toISOString();
+  // target_date は date 型なので YYYY-MM-DD で比較する。
+  const yearStartDate = `${year}-01-01`;
+  const yearEndDate = `${year + 1}-01-01`;
 
   const supabase = await createSupabaseServerClient();
+  // target_date が設定されたレコードは target_date がその年内、
+  // NULL の旧レコードは created_at がその年内 (JST 換算した UTC 境界) を採用。
+  // .or() 構文の値は PostgREST の特殊文字 (`,()`) や `.` `:` を含むためダブルクォート
+  // で囲む (PR #31 review より)。
   const { data, error } = await supabase
     .from("records")
-    .select("id, type, answers, checks, created_at, updated_at")
-    .gte("created_at", yearStartUtc)
-    .lt("created_at", yearEndUtc)
+    .select("id, type, answers, checks, target_date, created_at, updated_at")
+    .or(
+      `and(target_date.gte.${yearStartDate},target_date.lt.${yearEndDate}),` +
+        `and(target_date.is.null,created_at.gte."${yearStartUtc}",created_at.lt."${yearEndUtc}")`,
+    )
+    .order("target_date", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(3000); // 1 年 6 種類 × 365 = 2190 を上限の目安に少し余裕を持たせる
 

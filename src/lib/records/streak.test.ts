@@ -11,6 +11,7 @@ function morning(createdAt: string): RecordRow {
     type: "morning",
     answers: {},
     checks: {},
+    target_date: null,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -91,6 +92,7 @@ describe("computeStreak", () => {
         type: "night",
         answers: {},
         checks: {},
+        target_date: null,
         created_at: "2026-05-19T13:00:00Z", // night JST 5/19 22:00
         updated_at: "2026-05-19T13:00:00Z",
       },

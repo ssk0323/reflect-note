@@ -2,12 +2,18 @@ import { describe, it, expect } from "vitest";
 import { groupRecordsByDate, formatDate } from "./group";
 import type { RecordRow } from "./types";
 
-function row(id: string, createdAt: string, type: RecordRow["type"] = "morning"): RecordRow {
+function row(
+  id: string,
+  createdAt: string,
+  type: RecordRow["type"] = "morning",
+  targetDate: string | null = null,
+): RecordRow {
   return {
     id,
     type,
     answers: {},
     checks: {},
+    target_date: targetDate,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -32,6 +38,24 @@ describe("groupRecordsByDate", () => {
 
   it("returns an empty array for empty input", () => {
     expect(groupRecordsByDate([])).toEqual([]);
+  });
+
+  it("target_date が設定されたレコードは target_date で日付グルーピングされる (PR #31 統合)", () => {
+    // 5/20 (UTC) に書いた morning だが target_date は 5/22 (明日の朝)
+    const future = row("a", "2026-05-20T13:00:00Z", "morning", "2026-05-22");
+    // 5/22 (UTC 22:30 JST) に書いた morning。target_date null (旧データ)
+    const sameDay = row("b", "2026-05-22T13:00:00Z", "morning");
+
+    const groups = groupRecordsByDate([future, sameDay]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].dateKey).toBe("2026-05-22");
+    expect(groups[0].records.map((r) => r.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("target_date NULL の旧レコードは created_at の JST 日付に fallback", () => {
+    const legacy = row("a", "2026-05-20T03:00:00Z"); // JST 12:00 → 5/20
+    const groups = groupRecordsByDate([legacy]);
+    expect(groups[0].dateKey).toBe("2026-05-20");
   });
 });
 

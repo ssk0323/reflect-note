@@ -6,7 +6,7 @@ describe("YearHeatmap", () => {
   it("通常年 (2026) のヒートマップを描画する", () => {
     render(<YearHeatmap year={2026} countsByDate={new Map()} />);
     expect(
-      screen.getByRole("img", { name: "2026年の記録ヒートマップ" }),
+      screen.getByRole("img", { name: /2026年の記録ヒートマップ/ }),
     ).toBeInTheDocument();
   });
 
@@ -26,6 +26,21 @@ describe("YearHeatmap", () => {
     const { container } = render(<YearHeatmap year={2025} countsByDate={counts} />);
     const cell = container.querySelector('[title="2025-12-31: 2件"]');
     expect(cell).toBeTruthy();
+  });
+
+  it("aria-label に「記録のある日」と「合計件数」のサマリが含まれる (a11y)", () => {
+    // Team review PR #33: Heatmap が SR で読めない指摘の回帰防止
+    const counts = new Map<string, number>([
+      ["2026-01-05", 0],
+      ["2026-01-06", 2],
+      ["2026-01-07", 3],
+    ]);
+    render(<YearHeatmap year={2026} countsByDate={counts} />);
+    const img = screen.getByRole("img");
+    const label = img.getAttribute("aria-label") ?? "";
+    expect(label).toContain("2026年");
+    expect(label).toContain("2日"); // 1/6 と 1/7 の 2 日に記録あり
+    expect(label).toContain("5件"); // 2 + 3 = 5 件
   });
 
   it("件数に応じて 4 段階の色になる", () => {

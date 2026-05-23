@@ -12,6 +12,7 @@ function r(id: string, type: FlowType, createdAt: string): RecordRow {
     type,
     answers: {},
     checks: {},
+    target_date: null,
     created_at: createdAt,
     updated_at: createdAt,
   };

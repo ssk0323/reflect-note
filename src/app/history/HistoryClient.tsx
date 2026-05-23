@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { FlowType } from "@/lib/flows";
 import {
@@ -33,25 +33,6 @@ type Props = {
 type Filter = "all" | FlowType;
 type ViewMode = "calendar" | "list";
 
-function useIsMobile(): boolean {
-  return useSyncExternalStore(
-    (callback) => {
-      const mql = window.matchMedia("(max-width: 768px)");
-      // Safari 13 以前は addEventListener が無く addListener のみ。
-      // 同様に removeEventListener も無い場合があるので feature detect する
-      // (Copilot review PR #33 で指摘あり)。
-      if (typeof mql.addEventListener === "function") {
-        mql.addEventListener("change", callback);
-        return () => mql.removeEventListener("change", callback);
-      }
-      mql.addListener(callback);
-      return () => mql.removeListener(callback);
-    },
-    () => window.matchMedia("(max-width: 768px)").matches,
-    () => false, // SSR fallback: PC レイアウト相当
-  );
-}
-
 const FILTER_OPTIONS: { value: Filter; label: string; key: keyof TypeCounts }[] = [
   { value: "all", label: "すべて", key: "all" },
   { value: "morning", label: "朝", key: "morning" },
@@ -72,14 +53,11 @@ export function HistoryClient({ records, year, todayDate, todayYear }: Props) {
   );
 
   const [filter, setFilter] = useState<Filter>("all");
-  // Web では Calendar、Mobile では List をデフォルト。
-  // useSyncExternalStore で viewport の状態を購読する (SSR は false 固定で
-  // hydration mismatch を避ける)。ユーザーがトグルしたら explicitView に
-  // 保存し、その後は viewport の変化を無視する。
-  const isMobile = useIsMobile();
-  const [explicitView, setExplicitView] = useState<ViewMode | null>(null);
-  const view: ViewMode = explicitView ?? (isMobile ? "list" : "calendar");
-  const setView = setExplicitView;
+  // ビューは常に Calendar デフォルト。viewport ベースの自動切替は SSR→CSR で
+  // Calendar→List の Layout Shift (CLS) を生むため廃止し、ユーザーが明示的に
+  // トグルする運用にした (team review PR #33 P0 指摘)。
+  // モバイルでも Calendar は機能するが、List の方が読みやすい人はトグルで切替。
+  const [view, setView] = useState<ViewMode>("calendar");
 
   // Calendar ビュー: 表示中の月 (1-12)。今年なら今月、過去/未来年なら 1 月。
   const initialMonth = year === todayYear ? Number(todayDate.split("-")[1]) : 1;

@@ -364,6 +364,7 @@ export default async function Home() {
       <TodoCard
         todos={todos}
         todayDate={todayKey}
+        timeOfDay={timeOfDay}
         showCarryAction={timeOfDay === "evening"}
         carryProposal={yesterdayPending}
       />

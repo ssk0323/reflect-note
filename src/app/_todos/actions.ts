@@ -166,8 +166,15 @@ export async function createTodo(input: {
   return { ok: true };
 }
 
-/** position UNIQUE 違反時に 1 度だけリトライする INSERT ヘルパー。
- *  並列 INSERT で同じ position を狙ったときは、後者が衝突するので max+1 を取り直す。 */
+/** position UNIQUE 違反時にリトライする INSERT ヘルパー。
+ *  並列 INSERT で同じ position を狙ったときは、後者が衝突するので max+1 を取り直す。
+ *
+ *  team review (2 周目) で「3 回 retry は並列 4+ で枯渇 + throw が unhandled」と
+ *  指摘されたため、回数を 8 に増やし、上限到達時は throw でなく `{ error }` を返す。
+ *
+ *  carry 系の冪等性 UNIQUE index (0009: `todos_unique_carry_idem_idx`) で 23505 が
+ *  発生したケースは「既に carry 済」と見なしたいので、呼び出し側で
+ *  `isCarryDuplicate` を判別できるよう error.constraint も伝播する。 */
 async function tryInsertWithPosition(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   userId: string,
@@ -179,8 +186,9 @@ async function tryInsertWithPosition(
     important: boolean;
     carry_from_date: string | null;
   },
-): Promise<{ error: unknown }> {
-  for (let attempt = 0; attempt < 3; attempt++) {
+): Promise<{ error: unknown; carryDuplicate?: boolean }> {
+  const MAX_RETRIES = 8;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const { data: maxRow, error: maxErr } = await supabase
       .from("todos")
       .select("position")
@@ -205,10 +213,19 @@ async function tryInsertWithPosition(
     });
     if (!error) return { error: null };
 
-    // UNIQUE 違反 (Postgres SQLSTATE 23505) なら attempt をもう一度。
     const code = (error as { code?: string }).code;
-    if (code !== "23505") return { error };
+    const constraint = (error as { details?: string; message?: string }).message ?? "";
+    if (code === "23505") {
+      // carry 冪等 UNIQUE index による衝突 = 既に carry 済 = 冪等成功と見なす
+      if (constraint.includes("todos_unique_carry_idem_idx")) {
+        return { error: null, carryDuplicate: true };
+      }
+      // position 衝突は次の attempt で max+1 を取り直して再試行
+      continue;
+    }
+    return { error };
   }
+  // throw でなく return に変更 (上位 catch なしで unhandled rejection になる問題を解消)
   return { error: new Error("position conflict after retries") };
 }
 
@@ -355,20 +372,27 @@ export async function reorderTodo(
   }
   if (!neighbor) return { ok: true }; // already at edge
 
-  // Atomic swap via RPC (migration 0008)。
-  // 2 段 UPDATE が途中失敗で position 重複を永続化する問題への根治。
-  const { error: rpcErr } = await auth.supabase.rpc("swap_todo_positions", {
-    id_a: current.id,
-    id_b: neighbor.id,
-  });
-
-  if (rpcErr) {
-    console.error("reorderTodo rpc failed", safeErrorContext(rpcErr));
-    return { ok: false, error: GENERIC_ERROR };
+  // Atomic swap via RPC (migration 0008/0009)。
+  // 並列 swap で sentinel 衝突 (23505) が起きた場合は 1 回だけリトライする
+  // (team review 2 周目 P0: sentinel=-1 並列衝突)。
+  // 0009 で FOR UPDATE による行ロックを入れたので 23505 はほぼ起きないが念のため。
+  let rpcErr: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error } = await auth.supabase.rpc("swap_todo_positions", {
+      id_a: current.id,
+      id_b: neighbor.id,
+    });
+    rpcErr = error;
+    if (!error) {
+      revalidatePath("/");
+      return { ok: true };
+    }
+    const code = (error as { code?: string }).code;
+    if (code !== "23505") break;
   }
 
-  revalidatePath("/");
-  return { ok: true };
+  console.error("reorderTodo rpc failed", safeErrorContext(rpcErr));
+  return { ok: false, error: GENERIC_ERROR };
 }
 
 // --------------------------------------------------------------------------
@@ -430,27 +454,12 @@ export async function carryTodoToTomorrow(
     return { ok: false, error: "日付が不正です" };
   }
 
-  // 冪等性: 同じ (target_date, carry_from_date, text) が既にあれば skip (team review P0)。
-  const { data: existing, error: dupErr } = await auth.supabase
-    .from("todos")
-    .select("id")
-    .eq("user_id", auth.user.id)
-    .eq("target_date", tomorrow)
-    .eq("carry_from_date", src.target_date)
-    .eq("text", src.text)
-    .limit(1);
+  // 冪等性: DB の部分 UNIQUE index (todos_unique_carry_idem_idx, 0009) が
+  // (user_id, target_date, carry_from_date) で重複 INSERT を物理ブロックする。
+  // 並列 2 タブで accept しても DB が片方を 23505 で reject し、
+  // tryInsertWithPosition が carryDuplicate=true として冪等成功を返す。
 
-  if (dupErr) {
-    console.error("carryTodoToTomorrow dup check failed", safeErrorContext(dupErr));
-    return { ok: false, error: GENERIC_ERROR };
-  }
-  if (existing && existing.length > 0) {
-    // 既に carry 済み。冪等的に success を返す。
-    revalidatePath("/");
-    return { ok: true };
-  }
-
-  // 件数上限チェック
+  // 件数上限の事前チェック (UX: 上限超過時に明確なメッセージ)
   const cnt = await countTodos(auth.supabase, auth.user.id, tomorrow);
   if (cnt >= MAX_TODOS_PER_DAY) {
     return {
@@ -459,7 +468,7 @@ export async function carryTodoToTomorrow(
     };
   }
 
-  const { error: insErr } = await tryInsertWithPosition(
+  const { error: insErr, carryDuplicate } = await tryInsertWithPosition(
     auth.supabase,
     auth.user.id,
     tomorrow,
@@ -475,6 +484,12 @@ export async function carryTodoToTomorrow(
   if (insErr) {
     console.error("carryTodoToTomorrow insert failed", safeErrorContext(insErr));
     return { ok: false, error: GENERIC_ERROR };
+  }
+
+  // carryDuplicate なら既に carry 済 (= 冪等成功)
+  if (carryDuplicate) {
+    revalidatePath("/");
+    return { ok: true };
   }
 
   revalidatePath("/");
@@ -585,51 +600,30 @@ export async function acceptCarryProposal(
     return { ok: false, error: "対象の ToDo が見つかりません" };
   }
 
-  // 既に carry 済みのものを除外 (冪等性: 同じ提案を 2 回 accept しても重複しない)
-  const { data: alreadyCarried } = await auth.supabase
-    .from("todos")
-    .select("carry_from_date, text")
-    .eq("user_id", auth.user.id)
-    .eq("target_date", todayDate)
-    .in(
-      "carry_from_date",
-      Array.from(new Set(sources.map((s) => s.target_date))),
-    );
+  // 冪等性は DB の部分 UNIQUE index (todos_unique_carry_idem_idx, 0009) が担保。
+  // 並列 2 タブ accept で両方が同じ source を insert しようとしても、
+  // 後者は 23505 (todos_unique_carry_idem_idx) で reject される → carryDuplicate
+  // で冪等成功とみなして skip。
 
-  const carriedKey = new Set(
-    (alreadyCarried ?? []).map(
-      (r) => `${r.carry_from_date}::${r.text}`,
-    ),
-  );
-  const toInsert = sources.filter(
-    (s) => !carriedKey.has(`${s.target_date}::${s.text}`),
-  );
-
-  if (toInsert.length === 0) {
-    // 全部既に carry 済み。冪等成功。
-    revalidatePath("/");
-    return { ok: true };
-  }
-
-  // 件数上限
+  // 件数上限の事前チェック (上限近くでも全部 carry 済なら問題なく通る)
   const cnt = await countTodos(auth.supabase, auth.user.id, todayDate);
-  if (cnt + toInsert.length > MAX_TODOS_PER_DAY) {
+  if (cnt + sources.length > MAX_TODOS_PER_DAY) {
     return {
       ok: false,
       error: `1 日 ${MAX_TODOS_PER_DAY} 件を超えるため取り込めません`,
     };
   }
 
-  // bucket-aware に 1 件ずつ insert (UNIQUE 制約 + max+1 retry でレース耐性)。
-  // 順序は元の position 順。
-  toInsert.sort((a, b) => {
+  // 順序を安定化: target_date asc + position asc (元の昨日リスト順を再現)
+  const sorted = sources.slice().sort((a, b) => {
     if (a.target_date < b.target_date) return -1;
     if (a.target_date > b.target_date) return 1;
     return 0;
   });
 
-  for (const s of toInsert) {
-    const { error } = await tryInsertWithPosition(
+  let dupCount = 0;
+  for (const s of sorted) {
+    const { error, carryDuplicate } = await tryInsertWithPosition(
       auth.supabase,
       auth.user.id,
       todayDate,
@@ -645,7 +639,11 @@ export async function acceptCarryProposal(
       console.error("acceptCarryProposal insert failed", safeErrorContext(error));
       return { ok: false, error: GENERIC_ERROR };
     }
+    if (carryDuplicate) dupCount++;
   }
+
+  // dupCount は計測のみ (将来 UI で "N 件は既に追加済み" を出すための情報)
+  void dupCount;
 
   revalidatePath("/");
   return { ok: true };

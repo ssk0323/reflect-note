@@ -282,6 +282,60 @@ describe("TodoCard", () => {
     );
   });
 
+  it("timeOfDay=evening のとき、新規追加の bucket デフォが「夜」になる", async () => {
+    // team review 2 周目 P1: bucket default が forenoon 固定だった問題の回帰防止
+    createTodo.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+        timeOfDay="evening"
+      />,
+    );
+
+    const select = screen.getByLabelText("時間バケット");
+    expect((select as HTMLSelectElement).value).toBe("night");
+
+    const input = screen.getByLabelText("タスクの内容");
+    await user.type(input, "夜タスク");
+    await user.keyboard("{Enter}");
+
+    expect(createTodo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "夜タスク",
+        bucket: "night",
+      }),
+    );
+  });
+
+  it("timeOfDay=morning のとき bucket デフォは「朝」", () => {
+    render(
+      <TodoCard
+        todos={[]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+        timeOfDay="morning"
+      />,
+    );
+    const select = screen.getByLabelText("時間バケット") as HTMLSelectElement;
+    expect(select.value).toBe("morning");
+  });
+
+  it("timeOfDay=day のとき bucket デフォは「午後」", () => {
+    render(
+      <TodoCard
+        todos={[]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+        timeOfDay="day"
+      />,
+    );
+    const select = screen.getByLabelText("時間バケット") as HTMLSelectElement;
+    expect(select.value).toBe("afternoon");
+  });
+
   it("footer のカウントは todos props から再計算され、星付きも別途数える", () => {
     render(
       <TodoCard

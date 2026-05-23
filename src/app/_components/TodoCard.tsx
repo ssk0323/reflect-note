@@ -9,6 +9,14 @@ import {
   useTransition,
 } from "react";
 // useEffect は menu の外側クリック/Escape 検知でのみ使用 (setState in effect 警告対象外)
+
+/** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
+ *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
+ *  name のみログし、Sentry 等の集約 SaaS 導入時に PII が漏れる経路を絶つ。 */
+function redactClientError(e: unknown): { name: string } {
+  if (e instanceof Error) return { name: e.name };
+  return { name: typeof e };
+}
 import { useRouter } from "next/navigation";
 import {
   TODO_BUCKETS,
@@ -30,6 +38,8 @@ type Props = {
   todayDate: string;
   showCarryAction: boolean;
   carryProposal?: TodoRow[];
+  /** 「今は朝/昼/夜のどれか」を渡すと TodoAddRow の bucket デフォルトが連動する */
+  timeOfDay?: "morning" | "day" | "evening";
 };
 
 export function TodoCard({
@@ -37,6 +47,7 @@ export function TodoCard({
   todayDate,
   showCarryAction,
   carryProposal = [],
+  timeOfDay = "day",
 }: Props) {
   const byBucket = groupByBucket(todos);
 
@@ -142,7 +153,7 @@ export function TodoCard({
         );
       })}
 
-      <TodoAddRow todayDate={todayDate} />
+      <TodoAddRow todayDate={todayDate} timeOfDay={timeOfDay} />
 
       {/* Footer */}
       <div
@@ -231,7 +242,7 @@ function TodoListRow({
         }
       } catch (e) {
         setChecked(previous);
-        console.error("toggleTodoDone threw", e);
+        console.error("toggleTodoDone threw", redactClientError(e));
         setError("操作に失敗しました");
       }
     });
@@ -246,7 +257,7 @@ function TodoListRow({
         if (r.ok) refresh();
         else setError(r.error ?? "並び替えに失敗しました");
       } catch (e) {
-        console.error("reorderTodo threw", e);
+        console.error("reorderTodo threw", redactClientError(e));
         setError("並び替えに失敗しました");
       }
     });
@@ -261,7 +272,7 @@ function TodoListRow({
         if (r.ok) refresh();
         else setError(r.error ?? "引き継ぎに失敗しました");
       } catch (e) {
-        console.error("carryTodoToTomorrow threw", e);
+        console.error("carryTodoToTomorrow threw", redactClientError(e));
         setError("引き継ぎに失敗しました");
       }
     });
@@ -277,7 +288,7 @@ function TodoListRow({
         if (r.ok) refresh();
         else setError(r.error ?? "削除に失敗しました");
       } catch (e) {
-        console.error("deleteTodo threw", e);
+        console.error("deleteTodo threw", redactClientError(e));
         setError("削除に失敗しました");
       }
     });
@@ -603,10 +614,29 @@ function TodoRowMenu({
 // TodoAddRow
 // ----------------------------------------------------------------------------
 
-function TodoAddRow({ todayDate }: { todayDate: string }) {
+/** timeOfDay → 同日内で「今やる」のに近いバケットを返す。
+ *  「今が午前」なら午前、「昼」なら午後、「夜」なら夜。「未指定」は午前。
+ *  (team review 2 周目 P1: bucket デフォが forenoon 固定で時間帯と乖離) */
+function defaultBucketFromTimeOfDay(
+  timeOfDay: "morning" | "day" | "evening",
+): TodoBucket {
+  if (timeOfDay === "morning") return "morning";
+  if (timeOfDay === "evening") return "night";
+  return "afternoon";
+}
+
+function TodoAddRow({
+  todayDate,
+  timeOfDay,
+}: {
+  todayDate: string;
+  timeOfDay: "morning" | "day" | "evening";
+}) {
   const router = useRouter();
   const [text, setText] = useState("");
-  const [bucket, setBucket] = useState<TodoBucket>("forenoon");
+  const [bucket, setBucket] = useState<TodoBucket>(() =>
+    defaultBucketFromTimeOfDay(timeOfDay),
+  );
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -627,7 +657,7 @@ function TodoAddRow({ todayDate }: { todayDate: string }) {
           setError(r.error ?? "追加に失敗しました");
         }
       } catch (e) {
-        console.error("createTodo threw", e);
+        console.error("createTodo threw", redactClientError(e));
         setError("追加に失敗しました。時間をおいて再度お試しください。");
       }
     });
@@ -752,7 +782,7 @@ function CarryProposalCard({
           setError(r.error ?? "取り込みに失敗しました");
         }
       } catch (e) {
-        console.error("acceptCarryProposal threw", e);
+        console.error("acceptCarryProposal threw", redactClientError(e));
         setError("取り込みに失敗しました");
       }
     });

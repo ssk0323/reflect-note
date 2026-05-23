@@ -14,7 +14,11 @@ export const config = {
      * - favicon.ico
      * - manifest.webmanifest (PWA: 未認証でもインストーラーが取得する必要がある)
      * - 静的アセット (svg/png/jpg/jpeg/gif/webp)
+     *
+     * 拡張子のドットは `\\.` でエスケープしリテラルに扱う (Copilot review PR #37)。
+     * エスケープ無しだと `.` がワイルドカードになり、例えば `favicon/ico` や
+     * `manifestXwebmanifest` のような意図しないパスも除外対象になる。
      */
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

@@ -183,8 +183,9 @@ export async function createTodo(input: {
  *  指摘されたため、回数を 8 に増やし、上限到達時は throw でなく `{ error }` を返す。
  *
  *  carry 系の冪等性 UNIQUE index (0009: `todos_unique_carry_idem_idx`) で 23505 が
- *  発生したケースは「既に carry 済」と見なしたいので、呼び出し側で
- *  `isCarryDuplicate` を判別できるよう error.constraint も伝播する。 */
+ *  発生したケースは「既に carry 済」と見なしたいので、戻り値に
+ *  `carryDuplicate: true` を立てて呼び出し側に伝える (constraint 名そのものは
+ *  伝播せず、error.message に含まれる名前を内部で見て判定するのみ)。 */
 async function tryInsertWithPosition(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   userId: string,
@@ -382,10 +383,18 @@ export async function reorderTodo(
   }
   if (!neighbor) return { ok: true }; // already at edge
 
-  // Atomic swap via RPC (migration 0008/0009)。
-  // 並列 swap で sentinel 衝突 (23505) が起きた場合は 1 回だけリトライする
-  // (team review 2 周目 P0: sentinel=-1 並列衝突)。
-  // 0009 で FOR UPDATE による行ロックを入れたので 23505 はほぼ起きないが念のため。
+  // Atomic swap via RPC (migration 0010)。
+  // 0010 で UNIQUE(user_id, target_date, bucket, position) を DEFERRABLE INITIALLY
+  // DEFERRED に変更し、RPC 内部は sentinel を使わず 2 回の UPDATE で
+  // (a→b, b→a) を 1 トランザクション内に納めるよう刷新済み。COMMIT 時に
+  // 制約が再評価されるので一時的な重複は許容され、sentinel 衝突 (23505) は
+  // 発生しなくなった (0008/0009 当時の sentinel=-1 / sentinel=-1000000-pos
+  // アプローチは過去のもの)。
+  //
+  // ただし行ロック (FOR UPDATE) を取る前に並列 RPC が他行と衝突するケースが
+  // 残る可能性が理論上ゼロではないため、23505 のみ 1 回だけリトライする
+  // (deadlock 40P01 はリトライ対象外: PostgreSQL がトランザクションを abort
+  // させるためリトライしてもすぐ別のロック競合に当たる)。
   let rpcErr: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const { error } = await auth.supabase.rpc("swap_todo_positions", {
@@ -468,8 +477,32 @@ export async function carryTodoToTomorrow(
   // (user_id, target_date, carry_from_date) で重複 INSERT を物理ブロックする。
   // 並列 2 タブで accept しても DB が片方を 23505 で reject し、
   // tryInsertWithPosition が carryDuplicate=true として冪等成功を返す。
+  //
+  // 冪等性の事前チェック (Round 5 Copilot review): 既に同じ source_date の
+  // carry が tomorrow に存在する場合、本処理は no-op になるので件数上限の
+  // 制約を受けず冪等 ok を返す。これをやらないと、上限到達済みのユーザーが
+  // 「昨日と同じ ToDo を carry」しようとしただけで limit エラーになり
+  // 冪等性が壊れる。
+  const { data: existingCarry, error: dupErr } = await auth.supabase
+    .from("todos")
+    .select("id")
+    .eq("user_id", auth.user.id)
+    .eq("target_date", tomorrow)
+    .eq("carry_from_date", src.target_date)
+    .limit(1)
+    .maybeSingle();
 
-  // 件数上限の事前チェック (UX: 上限超過時に明確なメッセージ)
+  if (dupErr) {
+    console.error("carryTodoToTomorrow dup check failed", safeErrorContext(dupErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
+  if (existingCarry) {
+    // 既に carry 済 → 冪等 ok (限度件数チェックをスキップ)
+    revalidatePath("/");
+    return { ok: true };
+  }
+
+  // 新規 carry の場合のみ件数上限の事前チェック
   const cnt = await countTodos(auth.supabase, auth.user.id, tomorrow);
   if (cnt >= MAX_TODOS_PER_DAY) {
     return {
@@ -618,10 +651,37 @@ export async function acceptCarryProposal(
   // 並列 2 タブ accept で両方が同じ source を insert しようとしても、
   // 後者は 23505 (todos_unique_carry_idem_idx) で reject される → carryDuplicate
   // で冪等成功とみなして skip。
+  //
+  // 件数上限の事前チェック (Round 5 Copilot review):
+  // 単純に `cnt + sources.length` で見ると、全部 carry 済 (= 全件 carryDuplicate
+  // で実際は INSERT 0 件) のケースでも上限近辺で error になり冪等性が壊れる。
+  // 既に carry 済の source_date を除いた「新規 INSERT 期待数」で比較する。
+  //
+  // 部分 UNIQUE (todos_unique_carry_idem_idx) は (target_date, carry_from_date)
+  // で 1 件のみを許すので、source_date あたり最大 1 件しか INSERT されない。
+  // expectedNew = todayDate に未登録の distinct source_date の数。
+  const sourceDates = Array.from(new Set(sources.map((s) => s.target_date)));
+  const { data: existingCarries, error: dupErr } = await auth.supabase
+    .from("todos")
+    .select("carry_from_date")
+    .eq("user_id", auth.user.id)
+    .eq("target_date", todayDate)
+    .in("carry_from_date", sourceDates);
 
-  // 件数上限の事前チェック (上限近くでも全部 carry 済なら問題なく通る)
+  if (dupErr) {
+    console.error("acceptCarryProposal dup check failed", safeErrorContext(dupErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
+
+  const existingDates = new Set(
+    (existingCarries ?? [])
+      .map((c) => c.carry_from_date as string | null)
+      .filter((d): d is string => !!d),
+  );
+  const expectedNew = sourceDates.filter((d) => !existingDates.has(d)).length;
+
   const cnt = await countTodos(auth.supabase, auth.user.id, todayDate);
-  if (cnt + sources.length > MAX_TODOS_PER_DAY) {
+  if (cnt + expectedNew > MAX_TODOS_PER_DAY) {
     return {
       ok: false,
       error: `1 日 ${MAX_TODOS_PER_DAY} 件を超えるため取り込めません`,

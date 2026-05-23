@@ -214,6 +214,20 @@ export default async function Home() {
     monthStart,
     monthEndExclusive,
   );
+  // 週/月の振り返り (Round 5 Copilot review): ヘッダーボタンの「完了済表示」用。
+  // 今週/今月の最新 weeklyReview / monthlyReview があれば done=true で時刻表示。
+  const weeklyReview = pickLatestInBoundsByDateRange(
+    recentRecords,
+    "weeklyReview",
+    weekStart,
+    weekEndExclusive,
+  );
+  const monthlyReview = pickLatestInBoundsByDateRange(
+    recentRecords,
+    "monthlyReview",
+    monthStart,
+    monthEndExclusive,
+  );
 
   // ToDo: 今日のリスト + 昨日の未完了 (朝の時間帯のみ提案表示)
   const { todos, error: todosError } = await fetchTodosForDate(todayKey);
@@ -269,9 +283,38 @@ export default async function Home() {
         : undefined,
       href: todayNight ? `/flows/night?edit=${todayNight.id}` : "/flows/night",
     },
-    // 週/月の振り返りボタンは「常に表示」(チャットの仕様確認より)
-    { kind: "weekReview", done: false, active: false, href: "/flows/weeklyReview" },
-    { kind: "monthReview", done: false, active: false, href: "/flows/monthlyReview" },
+    // 週/月の振り返りボタンは「常に表示」(チャットの仕様確認より)。
+    // 完了済 (今週/今月の review record あり) なら done=true + doneTime + edit href。
+    {
+      kind: "weekReview",
+      done: !!weeklyReview,
+      active: false,
+      doneTime: weeklyReview
+        ? new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Asia/Tokyo",
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(weeklyReview.created_at))
+        : undefined,
+      href: weeklyReview
+        ? `/flows/weeklyReview?edit=${weeklyReview.id}`
+        : "/flows/weeklyReview",
+    },
+    {
+      kind: "monthReview",
+      done: !!monthlyReview,
+      active: false,
+      doneTime: monthlyReview
+        ? new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Asia/Tokyo",
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(monthlyReview.created_at))
+        : undefined,
+      href: monthlyReview
+        ? `/flows/monthlyReview?edit=${monthlyReview.id}`
+        : "/flows/monthlyReview",
+    },
   ];
 
   // 今週・今月のラベル

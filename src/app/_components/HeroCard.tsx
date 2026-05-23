@@ -21,21 +21,18 @@ const COPY: Record<HeroMode, {
   body: string;
   primary: { label: string; href: string };
   secondary?: { label: string; href: string };
-  glyph: "sun" | "moon" | "none";
 }> = {
   morning: {
     eyebrow: "朝のセットアップ · 一日の始まりに",
     title: <>今日の輪郭を、<br />ひと筆で描く。</>,
     body: "5 つの問いに、書きたい分だけ。3 分でも、15 分でも。",
     primary: { label: "朝のセットアップを始める →", href: "/flows/morning" },
-    glyph: "sun",
   },
   night: {
     eyebrow: "夜のリフレクション · 一日の終わりに",
     title: <>今日を、<br />ひと呼吸して振り返る。</>,
     body: "7 つの問いに、書きたい分だけ。3 分でも、15 分でも。",
     primary: { label: "夜のリフレクションを始める →", href: "/flows/night" },
-    glyph: "moon",
   },
   done: {
     eyebrow: "今日の記録は揃いました",
@@ -43,7 +40,6 @@ const COPY: Record<HeroMode, {
     body: "朝・夜どちらも記録済みです。週・月の振り返りに進むか、今日の記録を見直すこともできます。",
     primary: { label: "週の目標を見る →", href: "/flows/weeklyGoal" },
     secondary: { label: "今日の記録を見直す", href: "/flows/morning" },
-    glyph: "none",
   },
 };
 
@@ -79,14 +75,6 @@ export function HeroCard({
   return (
     <article className="sk-card-lg p-7 sm:p-8" aria-label="今日のフォーカス">
       <div className="flex items-start gap-4">
-        {copy.glyph !== "none" && (
-          <span
-            aria-hidden
-            className={`sk-glyph ${
-              copy.glyph === "moon" ? "sk-glyph-moon" : "sk-glyph-sun"
-            }`}
-          />
-        )}
         <div className="flex-1">
           <p className="sk-eyebrow">{copy.eyebrow}</p>
           <h1 className="sk-h-xl mt-1">{copy.title}</h1>

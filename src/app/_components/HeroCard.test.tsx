@@ -36,7 +36,7 @@ function record(answers: Record<string, string>, checks: Record<string, boolean>
 }
 
 describe("HeroCard", () => {
-  it("morning モードでは朝の CTA と sun glyph を出す", () => {
+  it("morning モードでは朝の CTA を出す", () => {
     render(
       <HeroCard
         mode="morning"

@@ -175,37 +175,6 @@ body {
   background: transparent;
 }
 
-/* Sun / Moon glyph rendered with pure CSS (no extra assets needed). */
-.sk-glyph {
-  width: 56px;
-  height: 56px;
-  border: 1.6px solid var(--color-ink);
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.sk-glyph-moon::before {
-  content: "";
-  position: absolute;
-  inset: 6px 16px 6px 6px;
-  background: var(--color-bg);
-  border-radius: 50%;
-  border-top-right-radius: 6px;
-  border-bottom-right-radius: 6px;
-}
-
-.sk-glyph-sun::after {
-  content: "";
-  position: absolute;
-  inset: 14px;
-  border: 1.4px solid var(--color-ink);
-  border-radius: 50%;
-}
-
 /* ---- a11y: フォーカスリング ----
  * Tailwind preflight が outline をリセットするため、
  * `:focus-visible` で明示的にアクセント色のリングを描画する。

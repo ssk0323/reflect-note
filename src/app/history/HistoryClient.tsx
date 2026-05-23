@@ -28,6 +28,9 @@ type Props = {
   /** 今日の JST 日付 (YYYY-MM-DD) と JST 年 */
   todayDate: string;
   todayYear: number;
+  /** SELECT が `.limit()` 上限に達して一部のみ返した場合に true。
+   *  Copilot review PR #33 の「サイレント欠落」指摘への対応。 */
+  truncated?: boolean;
 };
 
 type Filter = "all" | FlowType;
@@ -43,7 +46,13 @@ const FILTER_OPTIONS: { value: Filter; label: string; key: keyof TypeCounts }[] 
   { value: "monthlyReview", label: "月振返", key: "monthlyReview" },
 ];
 
-export function HistoryClient({ records, year, todayDate, todayYear }: Props) {
+export function HistoryClient({
+  records,
+  year,
+  todayDate,
+  todayYear,
+  truncated = false,
+}: Props) {
   const counts = useMemo(() => countByType(records), [records]);
   const dateCounts = useMemo(() => countByDate(records), [records]);
   const dateTypes = useMemo(() => typesByDate(records), [records]);
@@ -111,6 +120,20 @@ export function HistoryClient({ records, year, todayDate, todayYear }: Props) {
         </div>
         <YearNav current={year} todayYear={todayYear} />
       </header>
+
+      {truncated && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="sk-card sk-card-dashed mb-4"
+          style={{ padding: 12 }}
+        >
+          <p className="sk-mono" style={{ color: "var(--color-warn)" }}>
+            ⚠️ {records.length} 件を超える記録があり、一部のみ表示しています。
+            詳細は年切替や別の絞り込みで参照してください。
+          </p>
+        </div>
+      )}
 
       {/* 年間ヒートマップ */}
       <section

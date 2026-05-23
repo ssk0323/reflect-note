@@ -4,9 +4,6 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { RecordRow } from "@/lib/records/types";
 import {
   getJstDayBoundsUtc,
-  getJstMonthBoundsUtc,
-  getJstWeekBoundsUtc,
-  type BoundsUtc,
 } from "@/lib/records/period";
 import {
   formatJstMonth,
@@ -17,6 +14,14 @@ import {
   computeStreak,
 } from "@/lib/records/streak";
 import { computeAchievements } from "@/lib/records/achievements";
+import {
+  addDays,
+  addMonths,
+  resolveRecordDate,
+  startOfJstMonth,
+  startOfJstWeek,
+  toJstDateString,
+} from "@/lib/records/targetDate";
 import { GoalCard, type CheckableField } from "./_components/GoalCard";
 import { HeroCard, type HeroMode } from "./_components/HeroCard";
 import { TopStreakChips } from "./_components/TopStreakChips";
@@ -46,29 +51,52 @@ const MONTHLY_GOAL_CHECKABLES: CheckableField[] = [
   { key: "monthPriority3", kind: "task", label: "重点タスク 3" },
 ];
 
-function pickLatestInBounds(
+// recentRecords から、指定 type かつ指定期間内で「最新に書かれた (created_at 最大)」
+// 1 件を返す。期間判定は target_date (あれば) → created_at の JST 日付 (Issue #30) で行う。
+// records の並び順には依存しない (fetchRecentRecords の order が変わっても安定)。
+function pickLatestInBoundsByDateRange(
   records: RecordRow[],
   type: Flow["type"],
-  bounds: BoundsUtc,
+  startDate: string, // YYYY-MM-DD (inclusive)
+  endDateExclusive: string, // YYYY-MM-DD (exclusive)
 ): RecordRow | null {
-  const startMs = Date.parse(bounds.start);
-  const endMs = Date.parse(bounds.end);
+  let latest: RecordRow | null = null;
+  let latestCreatedMs = -Infinity;
   for (const r of records) {
     if (r.type !== type) continue;
-    const t = Date.parse(r.created_at);
-    if (t >= startMs && t < endMs) return r;
+    const key = resolveRecordDate(r);
+    if (key < startDate || key >= endDateExclusive) continue;
+    const createdMs = Date.parse(r.created_at);
+    if (createdMs > latestCreatedMs) {
+      latest = r;
+      latestCreatedMs = createdMs;
+    }
   }
-  return null;
+  return latest;
 }
 
 async function fetchRecentRecords(
   supabase: SupabaseServerClient,
-  lookbackStart: string,
+  lookbackDate: string, // YYYY-MM-DD: target_date がこの日以降のレコードを拾う
+  lookbackStartUtc: string, // ISO UTC: NULL target_date は created_at でフォールバック
 ): Promise<{ records: RecordRow[]; error: string | null }> {
+  // target_date が設定されたレコードは target_date >= lookbackDate で判定し、
+  // target_date が NULL の旧レコードは created_at >= lookbackStartUtc で判定する。
+  // これにより、例えば monthlyGoal "再来月" を 2 ヶ月前に書いた場合でも、
+  // 今月になったタイミングで target_date が一致して Home に表示される
+  // (created_at のみのフィルタだと 35 日 lookback の外に落ちる)。
+  //
+  // 並び順は target_date desc (NULL は最後) → created_at desc。
+  // limit(1000) に当たったときに、created_at が古いが target_date が現在/未来の
+  // レコードが押し出されないようにするため (Issue #30, PR #31 review より)。
   const { data, error } = await supabase
     .from("records")
-    .select("id, type, answers, checks, created_at, updated_at")
-    .gte("created_at", lookbackStart)
+    .select("id, type, answers, checks, target_date, created_at, updated_at")
+    .or(
+      `target_date.gte.${lookbackDate},` +
+        `and(target_date.is.null,created_at.gte.${lookbackStartUtc})`,
+    )
+    .order("target_date", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(1000);
 
@@ -140,40 +168,75 @@ const dateMetaFormatter = new Intl.DateTimeFormat("ja-JP", {
 export default async function Home() {
   const supabase = await createSupabaseServerClient();
   const now = new Date();
-  const dayBounds = getJstDayBoundsUtc(now);
-  const weekBounds = getJstWeekBoundsUtc(now);
-  const monthBounds = getJstMonthBoundsUtc(now);
 
+  // 過去 STREAK_LOOKBACK_DAYS 日分の records を 1 query で取得する。
+  // lookback の開始は「N 日前の JST 00:00」に丸める (現在時刻が正午のときに
+  // 最古日の午前分が漏れるのを防ぐ)。
   const lookbackShifted = new Date(
     now.getTime() - STREAK_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
   );
-  const lookbackStart = getJstDayBoundsUtc(lookbackShifted).start;
+  const lookbackStartUtc = getJstDayBoundsUtc(lookbackShifted).start;
+  const lookbackDate = toJstDateString(lookbackShifted);
+
   const { records: recentRecords, error: recentError } = await fetchRecentRecords(
     supabase,
-    lookbackStart,
+    lookbackDate,
+    lookbackStartUtc,
   );
 
   const morningStreak = computeStreak(recentRecords, "morning", now);
   const nightStreak = computeStreak(recentRecords, "night", now);
   const achievements = computeAchievements(recentRecords, now);
 
-  const todayMorning = pickLatestInBounds(recentRecords, "morning", dayBounds);
-  const todayNight = pickLatestInBounds(recentRecords, "night", dayBounds);
-  const weeklyGoal = pickLatestInBounds(recentRecords, "weeklyGoal", weekBounds);
-  const monthlyGoal = pickLatestInBounds(recentRecords, "monthlyGoal", monthBounds);
+  // 期間境界を JST 日付文字列で表現する。
+  // - 今日: dayStart 〜 dayStart+1 日
+  // - 今週: 月曜 〜 翌月曜
+  // - 今月: 月初 〜 翌月初
+  const todayKey = toJstDateString(now);
+  const dayStart = todayKey;
+  const dayEndExclusive = addDays(dayStart, 1);
+  const weekStart = startOfJstWeek(todayKey);
+  const weekEndExclusive = addDays(weekStart, 7);
+  const monthStart = startOfJstMonth(todayKey);
+  const monthEndExclusive = addMonths(monthStart, 1);
+
+  const todayMorning = pickLatestInBoundsByDateRange(
+    recentRecords,
+    "morning",
+    dayStart,
+    dayEndExclusive,
+  );
+  const todayNight = pickLatestInBoundsByDateRange(
+    recentRecords,
+    "night",
+    dayStart,
+    dayEndExclusive,
+  );
+  const weeklyGoal = pickLatestInBoundsByDateRange(
+    recentRecords,
+    "weeklyGoal",
+    weekStart,
+    weekEndExclusive,
+  );
+  const monthlyGoal = pickLatestInBoundsByDateRange(
+    recentRecords,
+    "monthlyGoal",
+    monthStart,
+    monthEndExclusive,
+  );
 
   const heroMode = pickHeroMode(now, todayMorning, todayNight);
   const greeting = pickGreeting(now);
   const dateMeta = dateMetaFormatter.format(now);
 
-  const weekStartDate = new Date(weekBounds.start);
-  const weekSundayDate = new Date(
-    weekStartDate.getTime() + 6 * 24 * 60 * 60 * 1000,
-  );
+  const weekStartDate = new Date(`${weekStart}T00:00:00+09:00`);
+  const weekSundayDate = new Date(weekStartDate.getTime() + 6 * 24 * 60 * 60 * 1000);
   const weekSubtitle = weeklyGoal
     ? `${formatJstShortDate(weekStartDate)} 〜 ${formatJstShortDate(weekSundayDate)}`
     : undefined;
-  const monthSubtitle = monthlyGoal ? formatJstMonth(monthBounds.start) : undefined;
+  const monthSubtitle = monthlyGoal
+    ? formatJstMonth(new Date(`${monthStart}T00:00:00+09:00`))
+    : undefined;
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-6xl px-5 py-8 sm:px-7 sm:py-12">
@@ -231,7 +294,6 @@ export default async function Home() {
           </Link>
         </aside>
       </div>
-
     </main>
   );
 }

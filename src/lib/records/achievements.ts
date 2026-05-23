@@ -4,6 +4,7 @@ import {
   getJstWeekBoundsUtc,
   type BoundsUtc,
 } from "./period";
+import { resolveRecordDate, toJstDateString } from "./targetDate";
 
 // 月間達成バッジのしきい値 (デフォルト: 月 20 件以上)
 export const MONTHLY_COUNT_THRESHOLD = 20;
@@ -19,13 +20,21 @@ export type Achievement = {
   description: string;
 };
 
-function withinBounds(record: RecordRow, bounds: BoundsUtc): boolean {
-  // bounds は `new Date().toISOString()` 由来でミリ秒 3 桁の `Z` 表記固定だが、
-  // record.created_at は Supabase 側で `+00:00` 表記やマイクロ秒精度になる
-  // 可能性があり、文字列比較だと境界で誤判定する。Date.parse でタイムスタンプ
-  // 数値化してから比較する。
-  const t = Date.parse(record.created_at);
-  return t >= Date.parse(bounds.start) && t < Date.parse(bounds.end);
+/** bounds の start/end を JST 日付文字列に変換しておき、レコードごとの再計算を避ける。 */
+function toJstDateRange(bounds: BoundsUtc): { start: string; end: string } {
+  return {
+    start: toJstDateString(new Date(bounds.start)),
+    end: toJstDateString(new Date(bounds.end)),
+  };
+}
+
+function withinRange(
+  record: RecordRow,
+  range: { start: string; end: string },
+): boolean {
+  // target_date があれば「いつのための記録か」を優先 (Issue #30)。
+  const recordDate = resolveRecordDate(record);
+  return recordDate >= range.start && recordDate < range.end;
 }
 
 /**
@@ -41,11 +50,12 @@ export function computeAchievements(
 ): Achievement[] {
   const result: Achievement[] = [];
 
-  const weekBounds = getJstWeekBoundsUtc(now);
-  const monthBounds = getJstMonthBoundsUtc(now);
+  // bounds を JST 日付文字列に 1 度だけ変換する (records 件数分の再計算を避ける)。
+  const weekRange = toJstDateRange(getJstWeekBoundsUtc(now));
+  const monthRange = toJstDateRange(getJstMonthBoundsUtc(now));
 
-  const weekRecords = records.filter((r) => withinBounds(r, weekBounds));
-  const monthRecords = records.filter((r) => withinBounds(r, monthBounds));
+  const weekRecords = records.filter((r) => withinRange(r, weekRange));
+  const monthRecords = records.filter((r) => withinRange(r, monthRange));
 
   if (
     weekRecords.some((r) => r.type === "weeklyGoal") &&

@@ -11,7 +11,7 @@ export type RecordRow = {
   answers: FlowAnswers;
   checks: RecordChecks;
   // いつのための記録か (YYYY-MM-DD, JST)。NULL のときは created_at の JST 日付を fallback。
-  // 週/月フローでは「その週の月曜」「その月の 1 日」が入る (PR #31 で追加)。
+  // 週/月フローでは「その週の月曜」「その月の 1 日」が入る。
   target_date: string | null;
   created_at: string;
   updated_at: string;

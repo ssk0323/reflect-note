@@ -16,6 +16,7 @@ function record(
     type: "morning",
     answers,
     checks,
+    target_date: null,
     created_at: "2026-05-20T03:00:00Z",
     updated_at: "2026-05-20T03:00:00Z",
   };

@@ -88,6 +88,31 @@ describe("HistoryClient", () => {
     expect(within(sections[1]).getAllByRole("article")).toHaveLength(1);
   });
 
+  it("List ビュー: target_date が created_at と異なる場合はセクション見出しも target_date 基準", async () => {
+    // PR #31 統合: 夜 22:00 JST に翌日 morning を書いた場合
+    // grouping は target_date=2026-05-21、見出しも 2026-05-21 と一致する
+    const user = userEvent.setup();
+    const records: RecordRow[] = [
+      record(
+        "next-day-morning",
+        "morning",
+        "2026-05-20T13:00:00Z", // created_at JST 5/20 22:00
+        { goal: "明日の目標" },
+        "2026-05-21", // target_date は翌日
+      ),
+    ];
+
+    render(<HistoryClient records={records} {...DEFAULT_PROPS} />);
+    await user.click(screen.getByRole("button", { name: /📜 リスト/ }));
+
+    expect(
+      screen.getByRole("region", { name: /2026年5月21日/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: /2026年5月20日/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("List ビューでフィルタを変えると表示が絞られる", async () => {
     const user = userEvent.setup();
     const records: RecordRow[] = [

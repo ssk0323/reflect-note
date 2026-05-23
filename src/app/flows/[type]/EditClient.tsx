@@ -4,17 +4,37 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Flow, FlowAnswers, Question } from "@/lib/flows";
+import { normalizeTargetDate } from "@/lib/records/targetDate";
 import { updateFlowRecord } from "./actions";
+import { FlowDateChips } from "./FlowDateChips";
 
 type Props = {
   flow: Flow;
   recordId: string;
   initialAnswers: FlowAnswers;
+  /** 既存レコードの target_date (NULL なら旧データ → initialFallbackDate を使う) */
+  initialTargetDate: string | null;
+  /** target_date が NULL の旧データを編集するときの初期値 (= created_at の JST 日付、
+   *  週/月フローでは正規化済み)。ユーザーが明示的に変更しない限り保存時に日付が
+   *  書き換わらないようにするため、サーバ側で計算して渡す。 */
+  initialFallbackDate: string;
 };
 
-export function EditClient({ flow, recordId, initialAnswers }: Props) {
+export function EditClient({
+  flow,
+  recordId,
+  initialAnswers,
+  initialTargetDate,
+  initialFallbackDate,
+}: Props) {
   const router = useRouter();
   const [answers, setAnswers] = useState<FlowAnswers>(initialAnswers);
+  // 旧データ (target_date NULL) はフォールバック日付 (= created_at の JST 日付を
+  // 週/月で正規化したもの) を初期値にする。ユーザーが chip 等で変更しない限り、
+  // 保存時に target_date が書き換わらない動作を保証する。
+  const [targetDate, setTargetDate] = useState<string>(
+    () => initialTargetDate ?? normalizeTargetDate(flow.type, initialFallbackDate),
+  );
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -26,7 +46,7 @@ export function EditClient({ flow, recordId, initialAnswers }: Props) {
     setError(null);
     startTransition(async () => {
       try {
-        const result = await updateFlowRecord(recordId, answers);
+        const result = await updateFlowRecord(recordId, answers, targetDate);
         if (result.ok) {
           router.push("/history");
         } else {
@@ -50,6 +70,14 @@ export function EditClient({ flow, recordId, initialAnswers }: Props) {
       </header>
 
       <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mb-6">
+          <FlowDateChips
+            type={flow.type}
+            value={targetDate}
+            onChange={setTargetDate}
+          />
+        </div>
+
         <div className="space-y-8">
           {flow.questions.map((q) => (
             <QuestionField

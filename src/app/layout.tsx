@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Kalam, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -19,6 +19,18 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "reflect-note",
   description: "朝に整え、夜に振り返る。リフレクションを習慣化するためのアプリ。",
+  // iOS Safari の「ホームに追加」で web app として開けるようにする。
+  appleWebApp: {
+    capable: true,
+    title: "reflect-note",
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  // Android Chrome のステータスバーや iOS Safari のタブ色に反映される。
+  // 墨色 (oklch 22% 0.015 60 ≈ #3a3530) で manifest と揃える。
+  themeColor: "#3a3530",
 };
 
 export default function RootLayout({

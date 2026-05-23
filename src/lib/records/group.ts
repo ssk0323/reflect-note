@@ -17,9 +17,20 @@ const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-function toDateKey(isoDateTime: string): string {
-  // en-CA locale は YYYY-MM-DD で返してくれるので、JST の日付文字列を取得できる
-  return dateKeyFormatter.format(new Date(isoDateTime));
+/** ISO 文字列または Date を JST の YYYY-MM-DD 日付キーに変換する。
+ *  History (heatmap / calendar dots / aggregates) と Group/Streak で共通利用。 */
+export function toJstDateKey(input: string | Date): string {
+  return dateKeyFormatter.format(input instanceof Date ? input : new Date(input));
+}
+
+/** record の「いつのための記録か」を JST 日付文字列で返す。
+ *  target_date があれば優先、なければ created_at の JST 日付 (PR #31 で追加)。
+ *  PR #31 マージ後に @/lib/records/targetDate の同名関数に寄せる予定。 */
+export function resolveRecordDate(record: {
+  target_date: string | null;
+  created_at: string;
+}): string {
+  return record.target_date ?? toJstDateKey(record.created_at);
 }
 
 export function groupRecordsByDate(records: RecordRow[]): DateGroup[] {
@@ -27,7 +38,7 @@ export function groupRecordsByDate(records: RecordRow[]): DateGroup[] {
   for (const r of records) {
     // target_date があれば「いつのための記録か」を優先、
     // なければ created_at の JST 日付 (旧データ互換)。
-    const key = r.target_date ?? toDateKey(r.created_at);
+    const key = resolveRecordDate(r);
     const arr = map.get(key);
     if (arr) {
       arr.push(r);

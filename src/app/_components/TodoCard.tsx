@@ -648,6 +648,10 @@ function TodoAddRow({
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // form field の id (Round 9 review followup: Chrome DevTools の
+  // "form field should have an id or name attribute" 警告対策)。
+  const textInputId = useId();
+  const bucketSelectId = useId();
 
   function submit() {
     if (!text.trim() || isPending) return;
@@ -705,6 +709,8 @@ function TodoAddRow({
       />
       <input
         ref={inputRef}
+        id={textInputId}
+        name="new-todo-text"
         type="text"
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -712,6 +718,7 @@ function TodoAddRow({
         disabled={isPending}
         placeholder="タスクを追加..."
         aria-label="タスクの内容"
+        autoComplete="off"
         className="flex-1 min-w-0"
         style={{
           fontFamily: "var(--font-sans), sans-serif",
@@ -725,6 +732,8 @@ function TodoAddRow({
         }}
       />
       <select
+        id={bucketSelectId}
+        name="new-todo-bucket"
         value={bucket}
         onChange={(e) => setBucket(e.target.value as TodoBucket)}
         disabled={isPending}

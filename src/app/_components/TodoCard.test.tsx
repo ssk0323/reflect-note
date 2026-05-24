@@ -194,17 +194,19 @@ describe("TodoCard", () => {
       />,
     );
 
-    const trigger = screen.getByLabelText("「A」の操作メニュー");
+    const trigger = screen.getByLabelText("「A」の操作");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("menu")).toBeInTheDocument();
+    // Round 9 review: role=menu は降格したので、popover の中の「削除」ボタンで
+    // 開いていることを確認する。
+    expect(screen.getByRole("button", { name: "削除" })).toBeInTheDocument();
 
     // Escape で閉じる
     await user.keyboard("{Escape}");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "削除" })).not.toBeInTheDocument();
   });
 
   it("⋯ メニューは行を超えて 1 つだけ open になる (global single-open)", async () => {
@@ -220,8 +222,8 @@ describe("TodoCard", () => {
       />,
     );
 
-    const triggerA = screen.getByLabelText("「A」の操作メニュー");
-    const triggerB = screen.getByLabelText("「B」の操作メニュー");
+    const triggerA = screen.getByLabelText("「A」の操作");
+    const triggerB = screen.getByLabelText("「B」の操作");
 
     await user.click(triggerA);
     expect(triggerA).toHaveAttribute("aria-expanded", "true");
@@ -230,7 +232,8 @@ describe("TodoCard", () => {
     // B 開く → A は閉じる
     expect(triggerA).toHaveAttribute("aria-expanded", "false");
     expect(triggerB).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    // 同時に open しているのは 1 つだけ (「削除」ボタンが画面上に 1 つ)
+    expect(screen.getAllByRole("button", { name: "削除" })).toHaveLength(1);
   });
 
   it("props で todo.done が変わると checked が同期する (state stale 回帰防止)", () => {

@@ -371,8 +371,10 @@ function TodoListRow({
             ↺
           </span>
         )}
+        {/* 時刻 or バケット表示。Round 9 review: aria-hidden を外して SR に
+            「いつやるか」が読まれるように。テキスト単体だと「13:00」「朝」など
+            短すぎて文脈が薄いので sr-only でラベル付ける。 */}
         <span
-          aria-hidden
           style={{
             fontFamily: "var(--font-mono), monospace",
             fontSize: 10,
@@ -385,6 +387,9 @@ function TodoListRow({
             background: "var(--color-bg)",
           }}
         >
+          <span className="sr-only">
+            {todo.time ? "予定時刻: " : "時間帯: "}
+          </span>
           {todo.time ?? TODO_BUCKET_LABEL[todo.bucket]}
         </span>
         {showCarryAction && !checked && (
@@ -551,8 +556,8 @@ function TodoRowMenu({
         type="button"
         onClick={onToggleOpen}
         disabled={isPending}
-        aria-label={`「${todo.text}」の操作メニュー`}
-        aria-haspopup="menu"
+        aria-label={`「${todo.text}」の操作`}
+        aria-haspopup="true"
         aria-expanded={isOpen}
         className="sk-mono"
         style={{
@@ -569,8 +574,12 @@ function TodoRowMenu({
         ⋯
       </button>
       {isOpen && (
+        // Round 9 review: role="menu"/"menuitem" は矢印キー/ロービング tabindex
+        // 等のメニュー用キーボード挙動を含意するが現状は単純なクリック+Tab 操作
+        // しか実装していない。ARIA セマンティクス不整合を避けるため、シンプルな
+        // ポップオーバー (role 無しの div + 通常 button) として扱う。
+        // aria-label でグループ名を提供。Esc / 外側クリックで閉じる挙動は維持。
         <div
-          role="menu"
           aria-label={`${todo.text} の操作`}
           className="sk-card"
           style={{
@@ -585,7 +594,6 @@ function TodoRowMenu({
         >
           <button
             type="button"
-            role="menuitem"
             onClick={() => {
               onClose();
               onDelete();

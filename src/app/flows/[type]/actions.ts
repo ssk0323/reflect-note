@@ -11,6 +11,58 @@ import {
 
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
+/** 朝のセットアップで入力された task1/2/3 を todos テーブルに自動連携する。
+ *  Issue #38 拡張 (B): 朝の宣言が ToDo 画面に出てこないと「実行する場」と
+ *  「宣言する場」が分断されてしまうので、朝の record INSERT 成功時に morning
+ *  バケットへ流す。空文字は skip。500 文字を超える text は CHECK 制約に違反するので
+ *  事前に slice する。
+ *
+ *  失敗時は親 record 保存を巻き戻さず log のみ (record が primary、todos は派生)。
+ *  position は INSERT 毎に max+1 を取り直して UNIQUE 違反を回避する。 */
+async function syncMorningTasksToTodos(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  targetDate: string,
+  answers: FlowAnswers,
+): Promise<void> {
+  const candidates = (["task1", "task2", "task3"] as const)
+    .map((k) => answers[k])
+    .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+    .map((t) => t.trim().slice(0, 500));
+
+  for (const text of candidates) {
+    const { data: maxRow } = await supabase
+      .from("todos")
+      .select("position")
+      .eq("user_id", userId)
+      .eq("target_date", targetDate)
+      .eq("bucket", "morning")
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextPos = (maxRow?.position ?? -1) + 1;
+
+    const { error } = await supabase.from("todos").insert({
+      user_id: userId,
+      target_date: targetDate,
+      bucket: "morning",
+      position: nextPos,
+      text,
+      time: null,
+      important: false,
+      carry_from_date: null,
+      carry_from_todo_id: null,
+    });
+    if (error) {
+      const code = (error as { code?: string }).code;
+      console.error("syncMorningTasksToTodos failed", { code });
+      // record 保存自体は成功しているので、ここでは throw しない (best-effort)。
+      // 連続失敗を抑えるため break する (例: 上限到達 / 列欠落など)。
+      break;
+    }
+  }
+}
+
 /** target_date を検証して正規化。不正なら null を返す (= 呼び出し側で error にする)。
  *  `now` は direction 判定の基準時刻。編集時はそのレコードの created_at を渡すと、
  *  「過去に書いた future フローを後日編集すると保存できない」問題を防げる。 */
@@ -57,6 +109,11 @@ export async function saveFlowRecord(
 
   if (error) {
     return { ok: false, error: error.message };
+  }
+
+  // 朝のセットアップ確定時に task1/2/3 を todos に自動連携 (Issue #38 拡張)
+  if (type === "morning") {
+    await syncMorningTasksToTodos(supabase, user.id, normalized, answers);
   }
 
   // トップの「本日の目標」「今週/今月の目標」は新規 record で即更新したい

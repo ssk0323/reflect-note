@@ -61,15 +61,27 @@ function isValidTime(v: unknown): v is string {
 
 /** Supabase の error オブジェクトをログ出力する際に、ユーザー入力テキストや個人情報を
  *  含むフィールドを除外し、code/hint/コンテキストだけを残す。
- *  (team review P2: console.error に Supabase エラー (= 入力 text 含む) 素通し) */
+ *  (team review P2: console.error に Supabase エラー (= 入力 text 含む) 素通し)
+ *
+ *  Round 8 Copilot review: アプリ内生成 Error (例: `new Error("position conflict
+ *  after retries")`) は Supabase 由来ではないので message に PII は含まれず、
+ *  落とすと原因調査が困難になる。`err instanceof Error` かつ `code` を持たない
+ *  ケース (= 我々のコードが投げた Error) に限り name / message を残す。
+ *  Supabase の PostgrestError は newer 版で Error を継承する場合もあるが、
+ *  `code` を必ず持つので分岐が成立する。 */
 function safeErrorContext(err: unknown): Record<string, unknown> {
   if (!err || typeof err !== "object") return { error: String(err) };
   const e = err as { code?: unknown; hint?: unknown; status?: unknown };
-  return {
+  const result: Record<string, unknown> = {
     code: typeof e.code === "string" ? e.code : undefined,
     hint: typeof e.hint === "string" ? e.hint : undefined,
     status: typeof e.status === "number" ? e.status : undefined,
   };
+  if (err instanceof Error && typeof e.code !== "string") {
+    result.appErrorName = err.name;
+    result.appErrorMessage = err.message;
+  }
+  return result;
 }
 
 type AuthOk = {

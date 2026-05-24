@@ -28,8 +28,11 @@ export type TodoRow = {
   position: number;
   done: boolean;
   important: boolean;
-  /** 引き継ぎ元の日付 (YYYY-MM-DD, JST)、または NULL */
+  /** 引き継ぎ元の日付 (YYYY-MM-DD, JST)、または NULL。表示ラベル用。 */
   carry_from_date: string | null;
+  /** 引き継ぎ元 ToDo の id。冪等性キー (Round 6 review)。
+   *  元 ToDo が削除されると NULL になる (FK on delete set null)。 */
+  carry_from_todo_id: string | null;
   created_at: string;
   updated_at: string;
 };

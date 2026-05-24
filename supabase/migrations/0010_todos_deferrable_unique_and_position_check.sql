@@ -13,8 +13,18 @@
 -- 3. 既存環境で position に重複がある可能性を defensive に潰す repair step も
 --    入れておく (PR #39 review #4 への対応: 0008 適用前に重複があった環境への
 --    後追い fix-up)。
+--
+-- 4. (Round 6 Copilot review) repair の `0,2,3 -> 0,1,2` のような位置回転は、
+--    非-DEFERRABLE UNIQUE が残ったままだと row-update 順次第で一時的に同じ
+--    position の重複扱いになり UNIQUE check が失敗しうる。そのため、
+--    `先に旧 UNIQUE を drop -> repair -> CHECK 追加 -> 新 DEFERRABLE UNIQUE 追加`
+--    の順に並べ直す。
 
--- 1) repair: もし重複 position が残っていたら、(user_id, target_date, bucket) 内で
+-- 1) 旧 (非-DEFERRABLE) UNIQUE を drop (repair が安全に走れるようにする)
+alter table public.todos
+  drop constraint todos_unique_position;
+
+-- 2) repair: もし重複 position が残っていたら、(user_id, target_date, bucket) 内で
 --    created_at, id の順に 0 から振り直す
 with ranked as (
   select
@@ -31,21 +41,18 @@ from ranked
 where t.id = ranked.id
   and t.position is distinct from ranked.new_position;
 
--- 2) position >= 0 の CHECK 制約 (sentinel との衝突を物理ブロック)
+-- 3) position >= 0 の CHECK 制約 (sentinel との衝突を物理ブロック)
 alter table public.todos
   add constraint todos_position_nonneg_check check (position >= 0);
 
--- 3) UNIQUE 制約を DEFERRABLE INITIALLY DEFERRED に張り直す
+-- 4) UNIQUE 制約を DEFERRABLE INITIALLY DEFERRED に張り直す
 --    (transaction 内で一時的に同じ position が複数存在することを許容)
-alter table public.todos
-  drop constraint todos_unique_position;
-
 alter table public.todos
   add constraint todos_unique_position
   unique (user_id, target_date, bucket, position)
   deferrable initially deferred;
 
--- 4) swap_todo_positions を sentinel 不要の 2 UPDATE に簡素化
+-- 5) swap_todo_positions を sentinel 不要の 2 UPDATE に簡素化
 --    DEFERRABLE UNIQUE があれば、関数内 (= 単一 transaction) で
 --    一時的に position が重複しても commit 時にチェックされる。
 create or replace function public.swap_todo_positions(

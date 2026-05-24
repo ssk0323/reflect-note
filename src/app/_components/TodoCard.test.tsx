@@ -36,6 +36,7 @@ function todo(overrides: Partial<TodoRow>): TodoRow {
     done: overrides.done ?? false,
     important: overrides.important ?? false,
     carry_from_date: overrides.carry_from_date ?? null,
+    carry_from_todo_id: overrides.carry_from_todo_id ?? null,
     created_at: overrides.created_at ?? "2026-05-22T00:00:00Z",
     updated_at: overrides.updated_at ?? "2026-05-22T00:00:00Z",
   };

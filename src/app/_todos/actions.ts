@@ -164,6 +164,8 @@ export async function createTodo(input: {
       time,
       important,
       carry_from_date: carryFromDate,
+      // 通常 create では carry idem キーは無し (carry 経路でのみ立てる)
+      carry_from_todo_id: null,
     },
   );
 
@@ -196,6 +198,8 @@ async function tryInsertWithPosition(
     time: string | null;
     important: boolean;
     carry_from_date: string | null;
+    /** 冪等性キー (Round 6 review): null なら carry idem index 対象外。 */
+    carry_from_todo_id: string | null;
   },
 ): Promise<{ error: unknown; carryDuplicate?: boolean }> {
   const MAX_RETRIES = 8;
@@ -221,6 +225,7 @@ async function tryInsertWithPosition(
       time: fields.time,
       important: fields.important,
       carry_from_date: fields.carry_from_date,
+      carry_from_todo_id: fields.carry_from_todo_id,
     });
     if (!error) return { error: null };
 
@@ -473,22 +478,24 @@ export async function carryTodoToTomorrow(
     return { ok: false, error: "日付が不正です" };
   }
 
-  // 冪等性: DB の部分 UNIQUE index (todos_unique_carry_idem_idx, 0009) が
-  // (user_id, target_date, carry_from_date) で重複 INSERT を物理ブロックする。
-  // 並列 2 タブで accept しても DB が片方を 23505 で reject し、
+  // 冪等性: DB の部分 UNIQUE index (todos_unique_carry_idem_idx, 0011) が
+  // (user_id, target_date, carry_from_todo_id) で重複 INSERT を物理ブロックする。
+  // 並列 2 タブで同じ src.id を carry しようとしても DB が片方を 23505 で reject し、
   // tryInsertWithPosition が carryDuplicate=true として冪等成功を返す。
   //
-  // 冪等性の事前チェック (Round 5 Copilot review): 既に同じ source_date の
+  // 冪等性の事前チェック (Round 5/6 Copilot review): 既に同じ src.id を元にした
   // carry が tomorrow に存在する場合、本処理は no-op になるので件数上限の
   // 制約を受けず冪等 ok を返す。これをやらないと、上限到達済みのユーザーが
-  // 「昨日と同じ ToDo を carry」しようとしただけで limit エラーになり
-  // 冪等性が壊れる。
+  // 「同じ ToDo を carry」しようとしただけで limit エラーになり冪等性が壊れる。
+  //
+  // ToDo 単位 (date 単位ではない) で冪等チェックすることで、昨日の未完了が
+  // 複数件あっても全件 carry できる (Round 6 review)。
   const { data: existingCarry, error: dupErr } = await auth.supabase
     .from("todos")
     .select("id")
     .eq("user_id", auth.user.id)
     .eq("target_date", tomorrow)
-    .eq("carry_from_date", src.target_date)
+    .eq("carry_from_todo_id", src.id)
     .limit(1)
     .maybeSingle();
 
@@ -521,6 +528,7 @@ export async function carryTodoToTomorrow(
       time: src.time,
       important: src.important,
       carry_from_date: src.target_date,
+      carry_from_todo_id: src.id,
     },
   );
 
@@ -555,7 +563,7 @@ export async function fetchTodosForDate(
   const { data, error } = await auth.supabase
     .from("todos")
     .select(
-      "id, target_date, text, bucket, time, position, done, important, carry_from_date, created_at, updated_at",
+      "id, target_date, text, bucket, time, position, done, important, carry_from_date, carry_from_todo_id, created_at, updated_at",
     )
     .eq("user_id", auth.user.id)
     .eq("target_date", date)
@@ -582,7 +590,7 @@ export async function fetchYesterdayPendingTodos(
   const { data, error } = await auth.supabase
     .from("todos")
     .select(
-      "id, target_date, text, bucket, time, position, done, important, carry_from_date, created_at, updated_at",
+      "id, target_date, text, bucket, time, position, done, important, carry_from_date, carry_from_todo_id, created_at, updated_at",
     )
     .eq("user_id", auth.user.id)
     .eq("target_date", yesterday)
@@ -647,38 +655,37 @@ export async function acceptCarryProposal(
     return { ok: false, error: "対象の ToDo が見つかりません" };
   }
 
-  // 冪等性は DB の部分 UNIQUE index (todos_unique_carry_idem_idx, 0009) が担保。
-  // 並列 2 タブ accept で両方が同じ source を insert しようとしても、
+  // 冪等性は DB の部分 UNIQUE index (todos_unique_carry_idem_idx, 0011) が担保。
+  // 並列 2 タブ accept で両方が同じ source ToDo を insert しようとしても、
   // 後者は 23505 (todos_unique_carry_idem_idx) で reject される → carryDuplicate
   // で冪等成功とみなして skip。
   //
-  // 件数上限の事前チェック (Round 5 Copilot review):
+  // 件数上限の事前チェック (Round 5/6 Copilot review):
   // 単純に `cnt + sources.length` で見ると、全部 carry 済 (= 全件 carryDuplicate
   // で実際は INSERT 0 件) のケースでも上限近辺で error になり冪等性が壊れる。
-  // 既に carry 済の source_date を除いた「新規 INSERT 期待数」で比較する。
+  // 既に carry 済の source_todo_id を除いた「新規 INSERT 期待数」で比較する。
   //
-  // 部分 UNIQUE (todos_unique_carry_idem_idx) は (target_date, carry_from_date)
-  // で 1 件のみを許すので、source_date あたり最大 1 件しか INSERT されない。
-  // expectedNew = todayDate に未登録の distinct source_date の数。
-  const sourceDates = Array.from(new Set(sources.map((s) => s.target_date)));
+  // Round 6 fix: UNIQUE が ToDo 単位 (carry_from_todo_id) に変わったので、
+  // expectedNew は「todayDate に carry_from_todo_id として未登録の uniqueIds の数」。
+  // これにより同じ日からの複数 ToDo carry も正しく見積もれる。
   const { data: existingCarries, error: dupErr } = await auth.supabase
     .from("todos")
-    .select("carry_from_date")
+    .select("carry_from_todo_id")
     .eq("user_id", auth.user.id)
     .eq("target_date", todayDate)
-    .in("carry_from_date", sourceDates);
+    .in("carry_from_todo_id", uniqueIds);
 
   if (dupErr) {
     console.error("acceptCarryProposal dup check failed", safeErrorContext(dupErr));
     return { ok: false, error: GENERIC_ERROR };
   }
 
-  const existingDates = new Set(
+  const existingIds = new Set(
     (existingCarries ?? [])
-      .map((c) => c.carry_from_date as string | null)
-      .filter((d): d is string => !!d),
+      .map((c) => c.carry_from_todo_id as string | null)
+      .filter((id): id is string => !!id),
   );
-  const expectedNew = sourceDates.filter((d) => !existingDates.has(d)).length;
+  const expectedNew = uniqueIds.filter((id) => !existingIds.has(id)).length;
 
   const cnt = await countTodos(auth.supabase, auth.user.id, todayDate);
   if (cnt + expectedNew > MAX_TODOS_PER_DAY) {
@@ -701,6 +708,7 @@ export async function acceptCarryProposal(
         time: s.time,
         important: s.important,
         carry_from_date: s.target_date,
+        carry_from_todo_id: s.id,
       },
     );
     if (error) {

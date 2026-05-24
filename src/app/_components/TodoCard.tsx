@@ -9,14 +9,6 @@ import {
   useTransition,
 } from "react";
 // useEffect は menu の外側クリック/Escape 検知でのみ使用 (setState in effect 警告対象外)
-
-/** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
- *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
- *  name のみログし、Sentry 等の集約 SaaS 導入時に PII が漏れる経路を絶つ。 */
-function redactClientError(e: unknown): { name: string } {
-  if (e instanceof Error) return { name: e.name };
-  return { name: typeof e };
-}
 import { useRouter } from "next/navigation";
 import {
   TODO_BUCKETS,
@@ -32,6 +24,14 @@ import {
   reorderTodo,
   toggleTodoDone,
 } from "@/app/_todos/actions";
+
+/** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
+ *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
+ *  name のみログし、Sentry 等の集約 SaaS 導入時に PII が漏れる経路を絶つ。 */
+function redactClientError(e: unknown): { name: string } {
+  if (e instanceof Error) return { name: e.name };
+  return { name: typeof e };
+}
 
 type Props = {
   todos: TodoRow[];

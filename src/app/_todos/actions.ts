@@ -93,18 +93,24 @@ async function requireAuth(): Promise<AuthOk | AuthFail> {
 }
 
 /** user_id × target_date 単位での todo 件数を返す (bucket は問わない、日全体)。
- *  MAX_TODOS_PER_DAY (200) 上限チェック用。 */
+ *  MAX_TODOS_PER_DAY (200) 上限チェック用。
+ *
+ *  Round 7 Copilot review: count 取得で error が出ても無視して 0 返しすると、
+ *  DB/network 障害時に上限チェックが silent に無効化されて後続 INSERT が
+ *  予期せぬ別エラーになる。`{ count, error }` を返して呼び出し側で安全側に
+ *  失敗できるようにする。 */
 async function countTodos(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   userId: string,
   targetDate: string,
-): Promise<number> {
-  const { count } = await supabase
+): Promise<{ count: number; error: unknown }> {
+  const { count, error } = await supabase
     .from("todos")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .eq("target_date", targetDate);
-  return count ?? 0;
+  if (error) return { count: 0, error };
+  return { count: count ?? 0, error: null };
 }
 
 // --------------------------------------------------------------------------
@@ -144,7 +150,15 @@ export async function createTodo(input: {
   const auth = await requireAuth();
   if (!auth.ok) return auth;
 
-  const existing = await countTodos(auth.supabase, auth.user.id, input.targetDate);
+  const { count: existing, error: countErr } = await countTodos(
+    auth.supabase,
+    auth.user.id,
+    input.targetDate,
+  );
+  if (countErr) {
+    console.error("createTodo count failed", safeErrorContext(countErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
   if (existing >= MAX_TODOS_PER_DAY) {
     return {
       ok: false,
@@ -510,7 +524,15 @@ export async function carryTodoToTomorrow(
   }
 
   // 新規 carry の場合のみ件数上限の事前チェック
-  const cnt = await countTodos(auth.supabase, auth.user.id, tomorrow);
+  const { count: cnt, error: cntErr } = await countTodos(
+    auth.supabase,
+    auth.user.id,
+    tomorrow,
+  );
+  if (cntErr) {
+    console.error("carryTodoToTomorrow count failed", safeErrorContext(cntErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
   if (cnt >= MAX_TODOS_PER_DAY) {
     return {
       ok: false,
@@ -687,7 +709,15 @@ export async function acceptCarryProposal(
   );
   const expectedNew = uniqueIds.filter((id) => !existingIds.has(id)).length;
 
-  const cnt = await countTodos(auth.supabase, auth.user.id, todayDate);
+  const { count: cnt, error: cntErr } = await countTodos(
+    auth.supabase,
+    auth.user.id,
+    todayDate,
+  );
+  if (cntErr) {
+    console.error("acceptCarryProposal count failed", safeErrorContext(cntErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
   if (cnt + expectedNew > MAX_TODOS_PER_DAY) {
     return {
       ok: false,

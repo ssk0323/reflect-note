@@ -459,7 +459,8 @@ function TodoListRow({
             disabled={isPending}
             maxLength={500}
             aria-label="タスク本文を編集"
-            className="flex-1 min-w-0"
+            // 編集中の input も coarse pointer で 44px hit area を確保
+            className="sk-tap-target flex-1 min-w-0"
             style={{
               fontFamily: "var(--font-sans), sans-serif",
               fontSize: todo.important ? 17 : 15,
@@ -478,7 +479,14 @@ function TodoListRow({
             type="button"
             onClick={startEditingText}
             disabled={isPending}
-            aria-label={`${currentText} を編集`}
+            // aria-label に重要フラグも含める (button に aria-label を付けると
+            // 子要素の sr-only がアクセシブル名計算から除外されるため;
+            // PR #41 round 3 Copilot review)。
+            aria-label={
+              todo.important
+                ? `重要なタスク: ${currentText} を編集`
+                : `${currentText} を編集`
+            }
             // sk-tap-target: coarse pointer で min-height 44px を確保 (WCAG 2.5.5)
             // text-left + min-w-0 truncate で行内に収める。
             className="sk-tap-target min-w-0 truncate text-left"
@@ -497,9 +505,8 @@ function TodoListRow({
               flex: 1,
             }}
           >
-            {todo.important && (
-              <span className="sr-only">重要なタスク: </span>
-            )}
+            {/* 重要フラグは aria-label に含まれるので、ここでは視覚的な
+                テキストのみ表示 (sr-only での重複読み上げを避ける)。 */}
             {currentText}
           </button>
         )}
@@ -549,12 +556,11 @@ function TodoListRow({
             onBlur={() => setIsEditingBucket(false)}
             disabled={isPending}
             aria-label={`${currentText} の時間帯を選択`}
+            // sk-chip で coarse pointer 時 44x44 タップターゲット確保
+            className="sk-chip"
             style={{
               fontFamily: "var(--font-mono), monospace",
               fontSize: 11,
-              padding: "4px 6px",
-              border: "1.2px solid var(--color-line)",
-              borderRadius: 10,
               color: "var(--color-ink)",
               background: "var(--color-bg)",
               cursor: "pointer",

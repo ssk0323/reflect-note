@@ -7,7 +7,7 @@ import type { TodoRow } from "@/lib/todos/types";
 const toggleTodoDone = vi.fn();
 const createTodo = vi.fn();
 const updateTodo = vi.fn();
-const reorderTodo = vi.fn();
+const moveTodo = vi.fn();
 const deleteTodo = vi.fn();
 const carryTodoToTomorrow = vi.fn();
 const acceptCarryProposal = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("@/app/_todos/actions", () => ({
   toggleTodoDone: (...args: unknown[]) => toggleTodoDone(...args),
   createTodo: (...args: unknown[]) => createTodo(...args),
   updateTodo: (...args: unknown[]) => updateTodo(...args),
-  reorderTodo: (...args: unknown[]) => reorderTodo(...args),
+  moveTodo: (...args: unknown[]) => moveTodo(...args),
   deleteTodo: (...args: unknown[]) => deleteTodo(...args),
   carryTodoToTomorrow: (...args: unknown[]) => carryTodoToTomorrow(...args),
   acceptCarryProposal: (...args: unknown[]) => acceptCarryProposal(...args),
@@ -49,7 +49,7 @@ describe("TodoCard", () => {
     toggleTodoDone.mockReset();
     createTodo.mockReset();
     updateTodo.mockReset();
-    reorderTodo.mockReset();
+    moveTodo.mockReset();
     deleteTodo.mockReset();
     carryTodoToTomorrow.mockReset();
     acceptCarryProposal.mockReset();
@@ -132,9 +132,7 @@ describe("TodoCard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   });
 
-  it("↑↓ ボタンで reorderTodo を呼ぶ (端では disabled)", async () => {
-    reorderTodo.mockResolvedValue({ ok: true });
-    const user = userEvent.setup();
+  it("↑↓ ボタンは Issue #44 で削除済み (ハンドル drag に一本化)", () => {
     render(
       <TodoCard
         todos={[
@@ -145,18 +143,27 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
+    expect(screen.queryByLabelText("このタスクを上に移動")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("このタスクを下に移動")).not.toBeInTheDocument();
+  });
 
-    // A は先頭なので「上に移動」が disabled
-    const aUp = screen.getAllByLabelText("このタスクを上に移動")[0];
-    expect(aUp).toBeDisabled();
-
-    // A の「下に移動」を押す
-    const aDown = screen.getAllByLabelText("このタスクを下に移動")[0];
-    await user.click(aDown);
-    expect(reorderTodo).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
-      "down",
+  it("各行に ≡ ドラッグハンドルが表示される", () => {
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A" }),
+          todo({ id: "22222222-2222-2222-2222-222222222222", text: "B" }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
     );
+    expect(
+      screen.getByRole("button", { name: /「A」をドラッグして並び替え/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /「B」をドラッグして並び替え/ }),
+    ).toBeInTheDocument();
   });
 
   it("showCarryAction=true の時、未完了タスクに「→明日」ボタンが出る", async () => {

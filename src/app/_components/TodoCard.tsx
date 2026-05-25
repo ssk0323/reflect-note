@@ -11,6 +11,22 @@ import {
 // useEffect は menu の外側クリック/Escape 検知でのみ使用 (setState in effect 警告対象外)
 import { useRouter } from "next/navigation";
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   TODO_BUCKETS,
   TODO_BUCKET_LABEL,
   type TodoBucket,
@@ -21,10 +37,13 @@ import {
   carryTodoToTomorrow,
   createTodo,
   deleteTodo,
-  reorderTodo,
+  moveTodo,
   toggleTodoDone,
   updateTodo,
 } from "@/app/_todos/actions";
+// reorderTodo は ↑↓ ボタン削除 (Issue #44) に伴い UI からは呼ばれなくなった。
+// server action / RPC は互換性のため残してある。
+import { computeMoveTarget } from "./computeMoveTarget";
 
 /** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
  *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
@@ -50,6 +69,7 @@ export function TodoCard({
   carryProposal = [],
   timeOfDay = "day",
 }: Props) {
+  const router = useRouter();
   const byBucket = groupByBucket(todos);
 
   // 達成集計はサーバから来た todos で常に再計算 (P2 toggle 後の集計未更新を解消)。
@@ -61,6 +81,52 @@ export function TodoCard({
   // 1 行だけ menu を open にするための global close 機構 (a11y P0)。
   // 各 TodoListRow が menuToken を保持し、別 row が open になったら自分は閉じる。
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  // Issue #44: ハンドル drag (@dnd-kit)。bucket 順に flatten した sortable 配列を作る。
+  // bucket 内の順序は byBucket がソート済み。各 row は useSortable で id を登録。
+  // 全 bucket 共通の SortableContext 1 つで、bucket 跨ぎ drag も成立する。
+  const flatItems = TODO_BUCKETS.flatMap((b) =>
+    byBucket[b].map((t) => ({ id: t.id, bucket: b })),
+  );
+  const flatIds = flatItems.map((t) => t.id);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const [, startReorderTransition] = useTransition();
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // 5px 動かさないと drag 開始しない。タップ操作 (= clickなど) と区別。
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over) return;
+    const target = computeMoveTarget(
+      flatItems,
+      String(active.id),
+      String(over.id),
+    );
+    if (target === null) return;
+    setReorderError(null);
+    startReorderTransition(async () => {
+      try {
+        const r = await moveTodo(
+          String(active.id),
+          target.bucket,
+          target.position,
+        );
+        if (r.ok) router.refresh();
+        else setReorderError(r.error ?? "並び替えに失敗しました");
+      } catch (e) {
+        console.error("moveTodo threw", redactClientError(e));
+        setReorderError("並び替えに失敗しました");
+      }
+    });
+  }
 
   return (
     <article
@@ -107,52 +173,73 @@ export function TodoCard({
         />
       )}
 
-      {/* バケットごとのリスト */}
-      {TODO_BUCKETS.map((bucket) => {
-        const items = byBucket[bucket];
-        if (items.length === 0) return null;
-        const bDone = items.filter((t) => t.done).length;
-        return (
-          <section
-            key={bucket}
-            aria-label={`${TODO_BUCKET_LABEL[bucket]}のタスク`}
-            className="mb-3"
-          >
-            <div
-              className="flex items-baseline gap-2 pb-1"
-              style={{ borderBottom: "1px solid var(--color-line)" }}
-            >
-              <span
-                style={{
-                  fontFamily: "var(--font-mono), monospace",
-                  fontSize: 10,
-                  letterSpacing: "0.14em",
-                  color: "var(--color-ink-3)",
-                  textTransform: "uppercase",
-                }}
+      {/* 並び替えエラー (Issue #44) */}
+      {reorderError && (
+        <p
+          role="alert"
+          className="sk-mono mb-2"
+          style={{ color: "var(--color-warn)" }}
+        >
+          {reorderError}
+        </p>
+      )}
+
+      {/* バケットごとのリスト。全 bucket を 1 つの DndContext + SortableContext で
+          包み、bucket 跨ぎ drag も同じ context 内で扱う (Issue #44)。 */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
+          {TODO_BUCKETS.map((bucket) => {
+            const items = byBucket[bucket];
+            if (items.length === 0) return null;
+            const bDone = items.filter((t) => t.done).length;
+            return (
+              <section
+                key={bucket}
+                aria-label={`${TODO_BUCKET_LABEL[bucket]}のタスク`}
+                className="mb-3"
               >
-                {TODO_BUCKET_LABEL[bucket]}
-              </span>
-              <span className="sk-mono" style={{ color: "var(--color-ink-4)" }}>
-                · {bDone} / {items.length}
-              </span>
-            </div>
-            <div>
-              {items.map((t, idx) => (
-                <TodoListRow
-                  key={t.id}
-                  todo={t}
-                  isFirst={idx === 0}
-                  isLast={idx === items.length - 1}
-                  showCarryAction={showCarryAction}
-                  openMenuId={openMenuId}
-                  setOpenMenuId={setOpenMenuId}
-                />
-              ))}
-            </div>
-          </section>
-        );
-      })}
+                <div
+                  className="flex items-baseline gap-2 pb-1"
+                  style={{ borderBottom: "1px solid var(--color-line)" }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      fontSize: 10,
+                      letterSpacing: "0.14em",
+                      color: "var(--color-ink-3)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {TODO_BUCKET_LABEL[bucket]}
+                  </span>
+                  <span
+                    className="sk-mono"
+                    style={{ color: "var(--color-ink-4)" }}
+                  >
+                    · {bDone} / {items.length}
+                  </span>
+                </div>
+                <div>
+                  {items.map((t) => (
+                    <TodoListRow
+                      key={t.id}
+                      todo={t}
+                      showCarryAction={showCarryAction}
+                      openMenuId={openMenuId}
+                      setOpenMenuId={setOpenMenuId}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </SortableContext>
+      </DndContext>
 
       <TodoAddRow todayDate={todayDate} timeOfDay={timeOfDay} />
 
@@ -166,7 +253,7 @@ export function TodoCard({
           {starTotal > 0 && ` · 大事な3つ ${starDone}/${starTotal}`}
         </span>
         <span className="sk-mono" style={{ color: "var(--color-ink-4)" }}>
-          ↑↓ で並び替え
+          ≡ をドラッグで並び替え
         </span>
       </div>
     </article>
@@ -195,19 +282,30 @@ function groupByBucket(todos: TodoRow[]): Record<TodoBucket, TodoRow[]> {
 
 function TodoListRow({
   todo,
-  isFirst,
-  isLast,
   showCarryAction,
   openMenuId,
   setOpenMenuId,
 }: {
   todo: TodoRow;
-  isFirst: boolean;
-  isLast: boolean;
   showCarryAction: boolean;
   openMenuId: string | null;
   setOpenMenuId: (id: string | null) => void;
 }) {
+  // Issue #44: useSortable で row を drag 対象に。listeners は handle ≡ にのみ付け、
+  // 行本体は通常の checkbox/編集操作のまま。
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: todo.id });
+  const sortableStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [checked, setChecked] = useState(todo.done);
@@ -344,20 +442,8 @@ function TodoListRow({
     });
   }
 
-  function handleReorder(direction: "up" | "down") {
-    if (isPending) return;
-    setError(null);
-    startTransition(async () => {
-      try {
-        const r = await reorderTodo(todo.id, direction);
-        if (r.ok) refresh();
-        else setError(r.error ?? "並び替えに失敗しました");
-      } catch (e) {
-        console.error("reorderTodo threw", redactClientError(e));
-        setError("並び替えに失敗しました");
-      }
-    });
-  }
+  // Issue #44: ↑↓ ボタンはハンドル drag に一本化されたため削除。
+  // reorderTodo server action / RPC は残してあるが UI からは呼ばない。
 
   function handleCarry() {
     if (isPending) return;
@@ -392,14 +478,16 @@ function TodoListRow({
 
   return (
     <div
+      ref={setNodeRef}
       role="group"
       aria-busy={isPending}
       className="grid items-center gap-2 py-2"
       style={{
+        ...sortableStyle,
         gridTemplateColumns: "auto 1fr auto",
         padding: todo.important ? "10px 4px" : "7px 4px",
         borderBottom: "1px dashed var(--color-line-soft)",
-        opacity: isPending ? 0.6 : 1,
+        opacity: (sortableStyle.opacity ?? 1) * (isPending ? 0.6 : 1),
       }}
     >
       {/* 左: checkbox + 重要マーク + テキスト (タップで編集モードへ; Issue #40)。
@@ -614,14 +702,32 @@ function TodoListRow({
             <span aria-hidden>→</span>明日
           </button>
         )}
-        <ReorderButtons
-          onUp={() => handleReorder("up")}
-          onDown={() => handleReorder("down")}
-          isFirst={isFirst}
-          isLast={isLast}
+        {/* Issue #44: ハンドル ≡ (タッチ/マウスで掴んでドラッグ、キーボードでも操作可)。
+            attributes + listeners はハンドル単独に付けることで、行本体タップは
+            編集モードのまま守られる (タップ誤操作防止)。 */}
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
           disabled={isPending}
-          taskName={todo.text}
-        />
+          aria-label={`「${currentText}」をドラッグして並び替え`}
+          className="sk-tap-target"
+          style={{
+            minWidth: 32,
+            padding: "8px 6px",
+            background: "transparent",
+            color: "var(--color-ink-3)",
+            border: "none",
+            borderRadius: 6,
+            cursor: isDragging ? "grabbing" : "grab",
+            fontSize: 18,
+            fontFamily: "var(--font-mono), monospace",
+            touchAction: "none",
+            lineHeight: 1,
+          }}
+        >
+          ≡
+        </button>
         <TodoRowMenu
           todo={todo}
           isOpen={openMenuId === todo.id}
@@ -642,68 +748,6 @@ function TodoListRow({
           {error}
         </p>
       )}
-    </div>
-  );
-}
-
-function ReorderButtons({
-  onUp,
-  onDown,
-  isFirst,
-  isLast,
-  disabled,
-  taskName,
-}: {
-  onUp: () => void;
-  onDown: () => void;
-  isFirst: boolean;
-  isLast: boolean;
-  disabled: boolean;
-  taskName: string;
-}) {
-  // ↑↓ は縦並びだが、タップターゲットは横幅もしっかり確保 (44px)。
-  return (
-    <div
-      className="flex flex-col"
-      role="group"
-      aria-label={`${taskName} の並び替え`}
-    >
-      <button
-        type="button"
-        onClick={onUp}
-        disabled={disabled || isFirst}
-        aria-label="このタスクを上に移動"
-        className="sk-mono"
-        style={{
-          color: isFirst ? "var(--color-ink-4)" : "var(--color-ink-3)",
-          background: "transparent",
-          border: "none",
-          cursor: isFirst ? "not-allowed" : "pointer",
-          padding: "6px 8px",
-          minWidth: 44,
-          lineHeight: 1,
-        }}
-      >
-        ▴
-      </button>
-      <button
-        type="button"
-        onClick={onDown}
-        disabled={disabled || isLast}
-        aria-label="このタスクを下に移動"
-        className="sk-mono"
-        style={{
-          color: isLast ? "var(--color-ink-4)" : "var(--color-ink-3)",
-          background: "transparent",
-          border: "none",
-          cursor: isLast ? "not-allowed" : "pointer",
-          padding: "6px 8px",
-          minWidth: 44,
-          lineHeight: 1,
-        }}
-      >
-        ▾
-      </button>
     </div>
   );
 }

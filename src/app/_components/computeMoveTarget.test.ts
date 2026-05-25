@@ -1,6 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { computeMoveTarget } from "./computeMoveTarget";
-import type { TodoBucket } from "@/lib/todos/types";
+import { applyMoveOptimistic, computeMoveTarget } from "./computeMoveTarget";
+import type { TodoBucket, TodoRow } from "@/lib/todos/types";
+
+function row(id: string, bucket: TodoBucket, position: number): TodoRow {
+  return {
+    id,
+    target_date: "2026-05-22",
+    text: id,
+    bucket,
+    time: null,
+    position,
+    done: false,
+    important: false,
+    carry_from_date: null,
+    carry_from_todo_id: null,
+    created_at: "2026-05-22T00:00:00Z",
+    updated_at: "2026-05-22T00:00:00Z",
+  };
+}
 
 // flat list helper
 function items(...rows: [string, TodoBucket][]) {
@@ -85,5 +102,56 @@ describe("computeMoveTarget (Issue #44)", () => {
     // overId="" のように invalid なら null を返す
     const flat = items(["a", "morning"]);
     expect(computeMoveTarget(flat, "a", "")).toBeNull();
+  });
+});
+
+describe("applyMoveOptimistic (Issue #44)", () => {
+  it("同 bucket: A を末尾に動かすと position が再採番される", () => {
+    const todos = [
+      row("a", "morning", 0),
+      row("b", "morning", 1),
+      row("c", "morning", 2),
+    ];
+    const result = applyMoveOptimistic(todos, "a", "morning", 2);
+    // 期待: B(0), C(1), A(2)
+    expect(result.map((t) => [t.id, t.bucket, t.position])).toEqual([
+      ["b", "morning", 0],
+      ["c", "morning", 1],
+      ["a", "morning", 2],
+    ]);
+  });
+
+  it("bucket 跨ぎ: M1 を afternoon position 1 に動かす", () => {
+    const todos = [
+      row("m1", "morning", 0),
+      row("m2", "morning", 1),
+      row("a1", "afternoon", 0),
+      row("a2", "afternoon", 1),
+    ];
+    const result = applyMoveOptimistic(todos, "m1", "afternoon", 1);
+    // 期待:
+    //   morning: M2(0)
+    //   afternoon: A1(0), M1(1), A2(2)
+    expect(result.map((t) => [t.id, t.bucket, t.position])).toEqual([
+      ["m2", "morning", 0],
+      ["a1", "afternoon", 0],
+      ["m1", "afternoon", 1],
+      ["a2", "afternoon", 2],
+    ]);
+  });
+
+  it("存在しない id なら todos をそのまま返す", () => {
+    const todos = [row("a", "morning", 0)];
+    expect(applyMoveOptimistic(todos, "x", "afternoon", 0)).toBe(todos);
+  });
+
+  it("空 bucket へ移動", () => {
+    const todos = [row("a", "morning", 0), row("b", "morning", 1)];
+    const result = applyMoveOptimistic(todos, "a", "night", 0);
+    // morning: B(0), night: A(0)
+    expect(result.map((t) => [t.id, t.bucket, t.position])).toEqual([
+      ["b", "morning", 0],
+      ["a", "night", 0],
+    ]);
   });
 });

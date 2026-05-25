@@ -1,5 +1,5 @@
 import { arrayMove } from "@dnd-kit/sortable";
-import type { TodoBucket } from "@/lib/todos/types";
+import { TODO_BUCKETS, type TodoBucket, type TodoRow } from "@/lib/todos/types";
 
 /** Issue #44 (B-3 drag): @dnd-kit drag end の (active, over) から、
  *  moveTodo に渡す (bucket, position) を計算する純粋関数。
@@ -47,4 +47,47 @@ export function computeMoveTarget(
   }
 
   return { bucket: newBucket, position: newPosition };
+}
+
+/** Issue #44 (optimistic UI): drop 直後にローカルで todos 並び替えを反映する。
+ *  サーバ応答を待たず即時 UI 更新。失敗時は呼び出し側で props.todos に戻す。
+ *  各 bucket 内で position を 0,1,2... と再採番する。 */
+export function applyMoveOptimistic(
+  todos: TodoRow[],
+  activeId: string,
+  newBucket: TodoBucket,
+  newPosition: number,
+): TodoRow[] {
+  const active = todos.find((t) => t.id === activeId);
+  if (!active) return todos;
+
+  // 1) active を除いた list を bucket ごとに集める (position 順で)
+  const remaining = todos.filter((t) => t.id !== activeId);
+  const byBucket: Record<TodoBucket, TodoRow[]> = {
+    morning: [],
+    forenoon: [],
+    afternoon: [],
+    night: [],
+  };
+  for (const t of remaining) byBucket[t.bucket].push(t);
+  for (const b of TODO_BUCKETS) {
+    byBucket[b].sort((a, b) => a.position - b.position);
+  }
+
+  // 2) active を target bucket の newPosition に splice 挿入 (新 bucket / 新 position を付与)
+  const updated: TodoRow = {
+    ...active,
+    bucket: newBucket,
+    position: newPosition,
+  };
+  byBucket[newBucket].splice(newPosition, 0, updated);
+
+  // 3) 各 bucket 内で position を再採番して flat list を返す
+  const result: TodoRow[] = [];
+  for (const b of TODO_BUCKETS) {
+    byBucket[b].forEach((t, idx) => {
+      result.push({ ...t, position: idx });
+    });
+  }
+  return result;
 }

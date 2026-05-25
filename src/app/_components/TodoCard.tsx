@@ -43,7 +43,7 @@ import {
 } from "@/app/_todos/actions";
 // reorderTodo は ↑↓ ボタン削除 (Issue #44) に伴い UI からは呼ばれなくなった。
 // server action / RPC は互換性のため残してある。
-import { computeMoveTarget } from "./computeMoveTarget";
+import { applyMoveOptimistic, computeMoveTarget } from "./computeMoveTarget";
 
 /** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
  *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
@@ -70,13 +70,26 @@ export function TodoCard({
   timeOfDay = "day",
 }: Props) {
   const router = useRouter();
-  const byBucket = groupByBucket(todos);
 
-  // 達成集計はサーバから来た todos で常に再計算 (P2 toggle 後の集計未更新を解消)。
-  const total = todos.length;
-  const doneCount = todos.filter((t) => t.done).length;
-  const starDone = todos.filter((t) => t.important && t.done).length;
-  const starTotal = todos.filter((t) => t.important).length;
+  // Issue #44 (optimistic UI): drop 直後にローカル並び替えを即時反映するため、
+  // optimisticTodos を保持する。null = サーバの todos をそのまま使う。
+  // props.todos が変わったら (= refresh で server 値同期完了) optimistic はクリア。
+  const [optimisticTodos, setOptimisticTodos] = useState<TodoRow[] | null>(null);
+  const [prevTodosRef, setPrevTodosRef] = useState(todos);
+  if (todos !== prevTodosRef) {
+    setPrevTodosRef(todos);
+    setOptimisticTodos(null);
+  }
+  const effectiveTodos = optimisticTodos ?? todos;
+  const byBucket = groupByBucket(effectiveTodos);
+
+  // 達成集計は表示用 todos (optimistic 反映後) で再計算。
+  const total = effectiveTodos.length;
+  const doneCount = effectiveTodos.filter((t) => t.done).length;
+  const starDone = effectiveTodos.filter(
+    (t) => t.important && t.done,
+  ).length;
+  const starTotal = effectiveTodos.filter((t) => t.important).length;
 
   // 1 行だけ menu を open にするための global close 機構 (a11y P0)。
   // 各 TodoListRow が menuToken を保持し、別 row が open になったら自分は閉じる。
@@ -105,23 +118,34 @@ export function TodoCard({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over) return;
-    const target = computeMoveTarget(
-      flatItems,
-      String(active.id),
-      String(over.id),
-    );
+    const activeId = String(active.id);
+    const target = computeMoveTarget(flatItems, activeId, String(over.id));
     if (target === null) return;
+
+    // Issue #44 (optimistic UI): drop 即時に local 並び替えを反映して
+    // server の round-trip 待ちを隠す。失敗時は props.todos に戻す (= null) で
+    // rollback、成功時は router.refresh() で server 値と同期 → 自然に optimistic
+    // クリア (props.todos !== prevTodosRef の分岐)。
+    const optimistic = applyMoveOptimistic(
+      effectiveTodos,
+      activeId,
+      target.bucket,
+      target.position,
+    );
+    setOptimisticTodos(optimistic);
     setReorderError(null);
+
     startReorderTransition(async () => {
       try {
-        const r = await moveTodo(
-          String(active.id),
-          target.bucket,
-          target.position,
-        );
-        if (r.ok) router.refresh();
-        else setReorderError(r.error ?? "並び替えに失敗しました");
+        const r = await moveTodo(activeId, target.bucket, target.position);
+        if (r.ok) {
+          router.refresh();
+        } else {
+          setOptimisticTodos(null);
+          setReorderError(r.error ?? "並び替えに失敗しました");
+        }
       } catch (e) {
+        setOptimisticTodos(null);
         console.error("moveTodo threw", redactClientError(e));
         setReorderError("並び替えに失敗しました");
       }

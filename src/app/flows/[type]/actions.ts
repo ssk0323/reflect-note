@@ -31,7 +31,9 @@ async function syncMorningTasksToTodos(
     .map((t) => t.trim().slice(0, 500));
 
   for (const text of candidates) {
-    const { data: maxRow } = await supabase
+    // Round 10 review: error を捨てると nextPos=0 で UNIQUE 違反になり原因が
+    // 分かりづらくなる。明示的に拾って break する。
+    const { data: maxRow, error: maxErr } = await supabase
       .from("todos")
       .select("position")
       .eq("user_id", userId)
@@ -40,8 +42,15 @@ async function syncMorningTasksToTodos(
       .order("position", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (maxErr) {
+      const code = (maxErr as { code?: string }).code;
+      console.error("syncMorningTasksToTodos max-pos query failed", { code });
+      break;
+    }
     const nextPos = (maxRow?.position ?? -1) + 1;
 
+    // Round 10 review: task1/2/3 は UI 上「★大事な 3 つ」として扱われている
+    // (Home の凡例 / GoalsStrip の STAR_KEYS) ので important=true で揃える。
     const { error } = await supabase.from("todos").insert({
       user_id: userId,
       target_date: targetDate,
@@ -49,7 +58,7 @@ async function syncMorningTasksToTodos(
       position: nextPos,
       text,
       time: null,
-      important: false,
+      important: true,
       carry_from_date: null,
       carry_from_todo_id: null,
     });

@@ -58,6 +58,14 @@ describe("targetDate / 日付変換", () => {
     expect(diffDays("2026-05-21", "2026-05-21")).toBe(0);
   });
 
+  it("diffDays は週単位の「残り N 日」表示と一致する (回帰防止)", () => {
+    // 月曜 5/18 〜 翌月曜 5/25 (exclusive) で:
+    // - 月曜表示: 残り 7 日 / 木曜表示: 残り 4 日 / 日曜表示: 残り 1 日
+    expect(diffDays("2026-05-25", "2026-05-18")).toBe(7);
+    expect(diffDays("2026-05-25", "2026-05-21")).toBe(4);
+    expect(diffDays("2026-05-25", "2026-05-24")).toBe(1);
+  });
+
   it("addDays は月をまたぐ", () => {
     expect(addDays("2026-05-31", 1)).toBe("2026-06-01");
     expect(addDays("2026-06-01", -1)).toBe("2026-05-31");

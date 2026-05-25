@@ -435,7 +435,8 @@ function TodoListRow({
   }, [isEditingText]);
 
   function startEditingText() {
-    if (isPending) return;
+    // PR #45 review: isPending ガードは撤去。row 共有の useTransition を介して
+    // 他操作 (toggle 等) の進行中に編集をブロックする経路だったため。
     setDraftText(currentText);
     setError(null);
     setIsEditingText(true);
@@ -517,7 +518,8 @@ function TodoListRow({
   }
 
   function handleToggle() {
-    if (isPending) return;
+    // PR #45 review: isPending ガード撤去。連続 toggle は server 側で順序処理され
+    // 最終的に last write wins + refresh で UI 同期。実用上競合は発生しない。
     const previous = checked;
     const next = !previous;
     setChecked(next);
@@ -544,7 +546,9 @@ function TodoListRow({
   // reorderTodo server action / RPC は残してあるが UI からは呼ばない。
 
   function handleCarry() {
-    if (isPending) return;
+    // PR #45 review: isPending ガード撤去。carry の二重 click は server 側の
+    // 部分 UNIQUE (todos_unique_carry_idem_idx) が 23505 で重複 INSERT を弾き、
+    // tryInsertWithPosition が carryDuplicate=true として冪等成功を返す。
     setError(null);
     startTransition(async () => {
       try {
@@ -559,7 +563,9 @@ function TodoListRow({
   }
 
   function handleDelete() {
-    if (isPending) return;
+    // PR #45 review: isPending ガード撤去。confirm 確認はそのまま残すので
+    // 暴発リスクは低い。連続削除は 2 回目が「対象 ToDo が見つかりません」エラーで
+    // 自然に fail (= 同じ row を 2 回 delete することは起きない構造)。
     if (!window.confirm("このタスクを削除しますか？")) return;
     onSetRowError(null);
     // 楽観 UI: 即座に行を消す。失敗で revert。
@@ -625,7 +631,7 @@ function TodoListRow({
             onChange={handleToggle}
             // PR #45 review: disabled={isPending} を外す。browser の disabled
             // ネイティブ styling (半透明グレー) が「処理中=未確定」に見えるため。
-            // 二重 submit は handleToggle 内の `if (isPending) return;` で防ぐ。
+            // 同時に handleToggle 側の isPending ガードも撤去 → 連続クリック OK。
             aria-label={`完了: ${currentText}`}
             className="h-4 w-4 cursor-pointer rounded-sm"
             style={{
@@ -679,8 +685,8 @@ function TodoListRow({
           <button
             type="button"
             onClick={startEditingText}
-            // PR #45 review: disabled は外す (gray-out 回避)。
-            // 二重 submit は startEditingText 内の `if (isPending) return;` で防ぐ。
+            // PR #45 review: disabled は外す (gray-out 回避)。連続編集 OK
+            // (server 側で last write wins、refresh で UI 同期)。
             // aria-label に重要フラグも含める (button に aria-label を付けると
             // 子要素の sr-only がアクセシブル名計算から除外されるため;
             // PR #41 round 3 Copilot review)。

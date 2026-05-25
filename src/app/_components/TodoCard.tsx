@@ -467,7 +467,9 @@ function TodoListRow({
             onClick={startEditingText}
             disabled={isPending}
             aria-label={`${currentText} を編集`}
-            className="min-w-0 truncate text-left"
+            // sk-tap-target: coarse pointer で min-height 44px を確保 (WCAG 2.5.5)
+            // text-left + min-w-0 truncate で行内に収める。
+            className="sk-tap-target min-w-0 truncate text-left"
             style={{
               fontFamily: "var(--font-sans), sans-serif",
               fontSize: todo.important ? 17 : 15,
@@ -558,14 +560,13 @@ function TodoListRow({
             onClick={() => !isPending && setIsEditingBucket(true)}
             disabled={isPending}
             aria-label={`${currentText} の時間帯を変更 (現在: ${TODO_BUCKET_LABEL[todo.bucket]})`}
+            // sk-chip クラスで coarse pointer 時 44x44 タップターゲット確保 (WCAG 2.5.5)
+            className="sk-chip"
             style={{
               fontFamily: "var(--font-mono), monospace",
               fontSize: 10,
               letterSpacing: "0.08em",
               textTransform: "uppercase",
-              padding: "4px 9px",
-              border: "1.2px solid var(--color-line)",
-              borderRadius: 10,
               color: "var(--color-ink-3)",
               background: "var(--color-bg)",
               cursor: "pointer",

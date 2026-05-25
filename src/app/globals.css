@@ -195,10 +195,13 @@ a:focus-visible {
 @media (pointer: coarse) {
   .sk-btn,
   .sk-chip,
+  .sk-tap-target,
   [role="gridcell"] {
     min-height: 44px;
   }
   .sk-chip {
     padding: 8px 12px;
   }
+  /* テキスト編集トリガー等、視覚的には padding 0 のままにしたい要素は
+     min-height のみ確保し、padding は呼び出し側で個別に調整する。 */
 }

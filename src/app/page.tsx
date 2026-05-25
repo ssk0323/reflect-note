@@ -432,7 +432,7 @@ export default async function Home() {
         today={todayMorning}
         week={weeklyGoal}
         month={monthlyGoal}
-        todayLabel={todayLabelFormatter.format(now)}
+        todayLabel={todayLabelFormatter.format(businessNow)}
         weekRangeLabel={weekRangeLabel}
         weekRemainingLabel={`残り ${daysToWeekEnd}日`}
         monthLabel={monthLabel}

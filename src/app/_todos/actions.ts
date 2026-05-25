@@ -737,10 +737,91 @@ export async function acceptCarryProposal(
     };
   }
 
-  // sources は既に DB 側で (target_date, bucket, position) asc に並んでいる。
-  let dupCount = 0;
-  for (const s of sources) {
-    const { error, carryDuplicate } = await tryInsertWithPosition(
+  // Round 12 Copilot review (perf): 旧実装は sources 件数分ループして毎回
+  // tryInsertWithPosition (= max position 取得 + insert) を走らせていたので、
+  // MAX_CARRY_BATCH=50 件で 100 往復になっていた。bucket ごとに max を 1 度だけ
+  // 取り、ローカルで position をインクリメントしてから batch INSERT する。
+  // 並列衝突 (23505) の rare ケースだけ既存の tryInsertWithPosition に fallback。
+
+  // 既存 carry 済の source は事前フィルタリングで除外 (= 二重 INSERT させない)
+  const newSources = sources.filter((s) => !existingIds.has(s.id));
+  if (newSources.length === 0) {
+    // 全部 carry 済 → 冪等成功
+    revalidatePath("/");
+    return { ok: true };
+  }
+
+  // bucket でグルーピング (sources は target_date asc / bucket asc / position asc
+  // で取得済みなので、各 bucket 内の順序は維持される)
+  const byBucket = new Map<TodoBucket, typeof newSources>();
+  for (const s of newSources) {
+    const bucket = s.bucket as TodoBucket;
+    const arr = byBucket.get(bucket);
+    if (arr) arr.push(s);
+    else byBucket.set(bucket, [s]);
+  }
+
+  // bucket ごとに max position を 1 度だけ取得し、insert 行を組み立てる
+  type InsertRow = {
+    user_id: string;
+    target_date: string;
+    bucket: TodoBucket;
+    position: number;
+    text: string;
+    time: string | null;
+    important: boolean;
+    carry_from_date: string;
+    carry_from_todo_id: string;
+  };
+  const insertRows: InsertRow[] = [];
+  for (const [bucket, items] of byBucket) {
+    const { data: maxRow, error: maxErr } = await auth.supabase
+      .from("todos")
+      .select("position")
+      .eq("user_id", auth.user.id)
+      .eq("target_date", todayDate)
+      .eq("bucket", bucket)
+      .order("position", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (maxErr) {
+      console.error("acceptCarryProposal max-pos failed", safeErrorContext(maxErr));
+      return { ok: false, error: GENERIC_ERROR };
+    }
+    let nextPos = (maxRow?.position ?? -1) + 1;
+    for (const s of items) {
+      insertRows.push({
+        user_id: auth.user.id,
+        target_date: todayDate,
+        bucket,
+        position: nextPos++,
+        text: s.text,
+        time: s.time,
+        important: s.important,
+        carry_from_date: s.target_date,
+        carry_from_todo_id: s.id,
+      });
+    }
+  }
+
+  // batch INSERT (= 1 round-trip で全件)
+  const { error: batchErr } = await auth.supabase.from("todos").insert(insertRows);
+  if (!batchErr) {
+    revalidatePath("/");
+    return { ok: true };
+  }
+
+  // 23505 は並列タブによる position / carry idem 衝突。1 件単位で
+  // tryInsertWithPosition に fallback (carry duplicate は冪等成功扱い、
+  // position 衝突は max+1 を取り直して retry)。それ以外は即 error 返却。
+  const code = (batchErr as { code?: string }).code;
+  if (code !== "23505") {
+    console.error("acceptCarryProposal batch insert failed", safeErrorContext(batchErr));
+    return { ok: false, error: GENERIC_ERROR };
+  }
+
+  for (const s of newSources) {
+    const { error: rowErr } = await tryInsertWithPosition(
       auth.supabase,
       auth.user.id,
       todayDate,
@@ -753,15 +834,14 @@ export async function acceptCarryProposal(
         carry_from_todo_id: s.id,
       },
     );
-    if (error) {
-      console.error("acceptCarryProposal insert failed", safeErrorContext(error));
+    if (rowErr) {
+      console.error(
+        "acceptCarryProposal fallback insert failed",
+        safeErrorContext(rowErr),
+      );
       return { ok: false, error: GENERIC_ERROR };
     }
-    if (carryDuplicate) dupCount++;
   }
-
-  // dupCount は計測のみ (将来 UI で "N 件は既に追加済み" を出すための情報)
-  void dupCount;
 
   revalidatePath("/");
   return { ok: true };

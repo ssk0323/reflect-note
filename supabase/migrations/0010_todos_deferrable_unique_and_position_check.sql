@@ -20,9 +20,11 @@
 --    `先に旧 UNIQUE を drop -> repair -> CHECK 追加 -> 新 DEFERRABLE UNIQUE 追加`
 --    の順に並べ直す。
 
--- 1) 旧 (非-DEFERRABLE) UNIQUE を drop (repair が安全に走れるようにする)
+-- 1) 旧 (非-DEFERRABLE) UNIQUE を drop (repair が安全に走れるようにする)。
+--    途中適用や手動変更で既に存在しない環境でも migration 全体を失敗させない
+--    よう IF EXISTS を付ける (Round 12 Copilot review)。
 alter table public.todos
-  drop constraint todos_unique_position;
+  drop constraint if exists todos_unique_position;
 
 -- 2) repair: もし重複 position が残っていたら、(user_id, target_date, bucket) 内で
 --    created_at, id の順に 0 から振り直す

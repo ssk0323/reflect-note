@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { applyMoveOptimistic, computeMoveTarget } from "./computeMoveTarget";
+import {
+  applyBucketChangeOptimistic,
+  applyDeleteOptimistic,
+  applyMoveOptimistic,
+  computeMoveTarget,
+} from "./computeMoveTarget";
 import type { TodoBucket, TodoRow } from "@/lib/todos/types";
 
 function row(id: string, bucket: TodoBucket, position: number): TodoRow {
@@ -153,5 +158,51 @@ describe("applyMoveOptimistic (Issue #44)", () => {
       ["b", "morning", 0],
       ["a", "night", 0],
     ]);
+  });
+});
+
+describe("applyDeleteOptimistic (PR #45 review)", () => {
+  it("指定 id を除外する", () => {
+    const todos = [
+      row("a", "morning", 0),
+      row("b", "morning", 1),
+      row("c", "afternoon", 0),
+    ];
+    const result = applyDeleteOptimistic(todos, "b");
+    expect(result.map((t) => t.id)).toEqual(["a", "c"]);
+  });
+
+  it("存在しない id ならそのまま", () => {
+    const todos = [row("a", "morning", 0)];
+    const result = applyDeleteOptimistic(todos, "x");
+    expect(result.map((t) => t.id)).toEqual(["a"]);
+  });
+});
+
+describe("applyBucketChangeOptimistic (PR #45 review)", () => {
+  it("新 bucket の末尾に移動する", () => {
+    const todos = [
+      row("a", "morning", 0),
+      row("b", "morning", 1),
+      row("c", "afternoon", 0),
+    ];
+    const result = applyBucketChangeOptimistic(todos, "a", "afternoon");
+    // morning: B(0), afternoon: C(0), A(1)
+    expect(result.map((t) => [t.id, t.bucket, t.position])).toEqual([
+      ["b", "morning", 0],
+      ["c", "afternoon", 0],
+      ["a", "afternoon", 1],
+    ]);
+  });
+
+  it("同じ bucket への変更は no-op", () => {
+    const todos = [row("a", "morning", 0)];
+    const result = applyBucketChangeOptimistic(todos, "a", "morning");
+    expect(result).toBe(todos);
+  });
+
+  it("存在しない id ならそのまま", () => {
+    const todos = [row("a", "morning", 0)];
+    expect(applyBucketChangeOptimistic(todos, "x", "afternoon")).toBe(todos);
   });
 });

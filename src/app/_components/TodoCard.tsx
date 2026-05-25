@@ -43,7 +43,12 @@ import {
 } from "@/app/_todos/actions";
 // reorderTodo は ↑↓ ボタン削除 (Issue #44) に伴い UI からは呼ばれなくなった。
 // server action / RPC は互換性のため残してある。
-import { applyMoveOptimistic, computeMoveTarget } from "./computeMoveTarget";
+import {
+  applyBucketChangeOptimistic,
+  applyDeleteOptimistic,
+  applyMoveOptimistic,
+  computeMoveTarget,
+} from "./computeMoveTarget";
 
 /** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
  *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
@@ -114,6 +119,36 @@ export function TodoCard({
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
+
+  // PR #45 review: 削除 / 時間帯変更 も同じ optimisticTodos を介して即時反映する。
+  // 各 callback は「server 通信を始める前に呼ばれる」前提。失敗時は revert を呼ぶ。
+  const applyOptimisticDelete = useCallback(
+    (id: string) => {
+      setOptimisticTodos((current) =>
+        applyDeleteOptimistic(current ?? todos, id),
+      );
+    },
+    [todos],
+  );
+
+  const applyOptimisticBucketChange = useCallback(
+    (id: string, newBucket: TodoBucket) => {
+      setOptimisticTodos((current) =>
+        applyBucketChangeOptimistic(current ?? todos, id, newBucket),
+      );
+    },
+    [todos],
+  );
+
+  const revertOptimistic = useCallback(() => {
+    setOptimisticTodos(null);
+  }, []);
+
+  // 削除 / 時間帯変更は行が remount するため TodoListRow ローカルの error state は
+  // 失われる。エラー表示は親 (TodoCard) に lift して banner で出す。
+  const setRowError = useCallback((msg: string | null) => {
+    setReorderError(msg);
+  }, []);
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -256,6 +291,10 @@ export function TodoCard({
                       showCarryAction={showCarryAction}
                       openMenuId={openMenuId}
                       setOpenMenuId={setOpenMenuId}
+                      onOptimisticDelete={applyOptimisticDelete}
+                      onOptimisticBucketChange={applyOptimisticBucketChange}
+                      onRevertOptimistic={revertOptimistic}
+                      onSetRowError={setRowError}
                     />
                   ))}
                 </div>
@@ -309,11 +348,21 @@ function TodoListRow({
   showCarryAction,
   openMenuId,
   setOpenMenuId,
+  onOptimisticDelete,
+  onOptimisticBucketChange,
+  onRevertOptimistic,
+  onSetRowError,
 }: {
   todo: TodoRow;
   showCarryAction: boolean;
   openMenuId: string | null;
   setOpenMenuId: (id: string | null) => void;
+  onOptimisticDelete: (id: string) => void;
+  onOptimisticBucketChange: (id: string, newBucket: TodoBucket) => void;
+  onRevertOptimistic: () => void;
+  /** 削除 / bucket 変更で行が remount されると local error state が消えるので、
+   *  親に lift して banner で表示する。 */
+  onSetRowError: (msg: string | null) => void;
 }) {
   // Issue #44: useSortable で row を drag 対象に。listeners は handle ≡ にのみ付け、
   // 行本体は通常の checkbox/編集操作のまま。
@@ -429,15 +478,23 @@ function TodoListRow({
   function commitBucketEdit(newBucket: TodoBucket) {
     setIsEditingBucket(false);
     if (newBucket === todo.bucket) return;
-    setError(null);
+    onSetRowError(null);
+    // 楽観 UI: 即座に新 bucket の末尾に動かしておく。失敗時 revert。
+    onOptimisticBucketChange(todo.id, newBucket);
     startTransition(async () => {
       try {
         const r = await updateTodo(todo.id, { bucket: newBucket });
-        if (r.ok) refresh();
-        else setError(r.error ?? "保存に失敗しました");
+        if (r.ok) {
+          refresh();
+        } else {
+          onRevertOptimistic();
+          // 行が remount するので親のエラー banner に出す
+          onSetRowError(r.error ?? "保存に失敗しました");
+        }
       } catch (e) {
+        onRevertOptimistic();
         console.error("updateTodo bucket threw", redactClientError(e));
-        setError("保存に失敗しました");
+        onSetRowError("保存に失敗しました");
       }
     });
   }
@@ -487,15 +544,22 @@ function TodoListRow({
   function handleDelete() {
     if (isPending) return;
     if (!window.confirm("このタスクを削除しますか？")) return;
-    setError(null);
+    onSetRowError(null);
+    // 楽観 UI: 即座に行を消す。失敗で revert。
+    onOptimisticDelete(todo.id);
     startTransition(async () => {
       try {
         const r = await deleteTodo(todo.id);
         if (r.ok) refresh();
-        else setError(r.error ?? "削除に失敗しました");
+        else {
+          onRevertOptimistic();
+          // 行が remount するので親のエラー banner に出す
+          onSetRowError(r.error ?? "削除に失敗しました");
+        }
       } catch (e) {
+        onRevertOptimistic();
         console.error("deleteTodo threw", redactClientError(e));
-        setError("削除に失敗しました");
+        onSetRowError("削除に失敗しました");
       }
     });
   }
@@ -511,7 +575,11 @@ function TodoListRow({
         gridTemplateColumns: "auto 1fr auto",
         padding: todo.important ? "10px 4px" : "7px 4px",
         borderBottom: "1px dashed var(--color-line-soft)",
-        opacity: (sortableStyle.opacity ?? 1) * (isPending ? 0.6 : 1),
+        // PR #45 review: 楽観 UI で表示は既に確定済みなので server 通信中の
+        // dim (`isPending ? 0.6 : 1`) は誤解の元 (= まだ未確定に見える)。
+        // sortableStyle.opacity (drag 中 0.5) だけ尊重し、isPending 由来の
+        // dim は外す。button の disabled は二重 submit 防止のため残す。
+        opacity: sortableStyle.opacity ?? 1,
       }}
     >
       {/* 左: checkbox + 重要マーク + テキスト (タップで編集モードへ; Issue #40)。

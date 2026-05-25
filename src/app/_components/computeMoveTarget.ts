@@ -91,3 +91,28 @@ export function applyMoveOptimistic(
   }
   return result;
 }
+
+/** PR #45 review: 削除の楽観 UI 用ヘルパー。指定 id を todos から除外する。
+ *  position の詰め直しはしない (サーバ側 / refresh が確定値を返す)。 */
+export function applyDeleteOptimistic(
+  todos: TodoRow[],
+  id: string,
+): TodoRow[] {
+  return todos.filter((t) => t.id !== id);
+}
+
+/** PR #45 review: 時間帯 (bucket) 変更の楽観 UI 用ヘルパー。
+ *  指定 todo を新 bucket の末尾に移す (= applyMoveOptimistic を bucket 末尾位置で
+ *  呼ぶラッパー)。新 bucket が同じなら何もしない。 */
+export function applyBucketChangeOptimistic(
+  todos: TodoRow[],
+  id: string,
+  newBucket: TodoBucket,
+): TodoRow[] {
+  const target = todos.find((t) => t.id === id);
+  if (!target) return todos;
+  if (target.bucket === newBucket) return todos;
+  // 新 bucket の現在の todo 数 = 末尾 position
+  const tailPos = todos.filter((t) => t.bucket === newBucket).length;
+  return applyMoveOptimistic(todos, id, newBucket, tailPos);
+}

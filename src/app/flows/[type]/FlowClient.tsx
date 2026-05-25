@@ -10,7 +10,7 @@ import {
   isValidDateString,
   normalizeTargetDate,
 } from "@/lib/records/targetDate";
-import { saveFlowRecord } from "./actions";
+import { findExistingRecord, saveFlowRecord } from "./actions";
 import { FlowDateChips } from "./FlowDateChips";
 
 type Props = {
@@ -27,15 +27,24 @@ export function FlowClient({ flow, initialDate }: Props) {
   // target_date のデフォルト: ?date= で受け取った値があり、かつ flow の direction
   // 制約 (例: morning は未来も OK、weeklyReview は過去のみ等) を満たせばそれを採用。
   // 不正なら従来の「フローの今」(defaultDateOptions[0]) にフォールバック。
-  const [targetDate, setTargetDate] = useState<string>(() => {
+  const initialDateValidated = (() => {
     if (initialDate && isValidDateString(initialDate)) {
       const normalized = normalizeTargetDate(flow.type, initialDate);
       if (isAllowedDirection(flow.type, normalized, new Date())) {
         return normalized;
       }
     }
-    return defaultDateOptions(flow.type)[0].value;
-  });
+    return null;
+  })();
+  const [targetDate, setTargetDate] = useState<string>(
+    () => initialDateValidated ?? defaultDateOptions(flow.type)[0].value,
+  );
+  // Issue #46 新方針: ?date= で渡って来た場合は日付選択ステップを skip
+  // (= リンク側で日付が確定している)。そうでなければ「いつのセットアップ?」を
+  // 最初に出し、findExistingRecord で既存 record があれば ?edit= に redirect。
+  const [dateConfirmed, setDateConfirmed] = useState<boolean>(
+    initialDateValidated !== null,
+  );
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -57,6 +66,13 @@ export function FlowClient({ flow, initialDate }: Props) {
   }
 
   function goBack() {
+    // Issue #46 新方針: 日付選択ステップを通った場合、step 0 から戻ると
+    // 日付選択に戻れるようにする。?date= で入った場合 (initialDateValidated 有り)
+    // は遷移元のリンクが日付込みなので date 選択には戻さない。
+    if (step === 0 && initialDateValidated === null) {
+      setDateConfirmed(false);
+      return;
+    }
     setStep((s) => Math.max(0, s - 1));
   }
 
@@ -78,6 +94,82 @@ export function FlowClient({ flow, initialDate }: Props) {
   }
 
   const targetLabel = formatTargetLabel(flow.type, targetDate);
+
+  function handleDateConfirm() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await findExistingRecord(flow.type, targetDate);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        if (result.id) {
+          // 既存 record あり → 編集モードへ
+          router.push(`/flows/${flow.type}?edit=${result.id}`);
+          return;
+        }
+        // 既存無し → 通常の作成フロー (step 0 へ)
+        setDateConfirmed(true);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "確認に失敗しました";
+        setError(message);
+      }
+    });
+  }
+
+  // Issue #46 新方針: 日付選択ステップ。初期表示で「いつのセットアップ?」を聞く。
+  if (!dateConfirmed) {
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-6 sm:py-10">
+        <header className="mb-6">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            {flow.label}
+          </p>
+          <h1 className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+            いつのぶんを書きますか？
+          </h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            日付を選んでください。すでにその日の記録があれば編集モードで開きます。
+          </p>
+        </header>
+
+        <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+          <FlowDateChips
+            type={flow.type}
+            value={targetDate}
+            onChange={setTargetDate}
+          />
+          {error && (
+            <p
+              role="alert"
+              className="mt-4 text-sm text-rose-600 dark:text-rose-400"
+            >
+              {error}
+            </p>
+          )}
+          <div className="mt-6 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              disabled={isPending}
+              className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:opacity-60"
+            >
+              戻る
+            </button>
+            <button
+              type="button"
+              onClick={handleDateConfirm}
+              disabled={isPending}
+              className="rounded-2xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:opacity-60"
+            >
+              {isPending ? "確認中..." : "次へ"}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   if (showConfirm) {
     return (

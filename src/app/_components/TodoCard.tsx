@@ -60,7 +60,13 @@ function redactClientError(e: unknown): { name: string } {
 
 type Props = {
   todos: TodoRow[];
+  /** Issue #46 新方針: ToDo セクション内のタブで前日/今日/翌日を切替表示する。
+   *  3 日分の todos を Home 側で fetch して渡す。viewDate は内部 state で持つ。 */
+  prevDayTodos?: TodoRow[];
+  nextDayTodos?: TodoRow[];
   todayDate: string;
+  prevDayDate?: string;
+  nextDayDate?: string;
   showCarryAction: boolean;
   carryProposal?: TodoRow[];
   /** 「今は朝/昼/夜のどれか」を渡すと TodoAddRow の bucket デフォルトが連動する */
@@ -69,23 +75,45 @@ type Props = {
 
 export function TodoCard({
   todos,
+  prevDayTodos = [],
+  nextDayTodos = [],
   todayDate,
+  prevDayDate,
+  nextDayDate,
   showCarryAction,
   carryProposal = [],
   timeOfDay = "day",
 }: Props) {
   const router = useRouter();
 
+  // Issue #46 新方針: 表示日タブ。default = 今日。
+  const [viewDate, setViewDate] = useState<string>(todayDate);
+  const isViewingToday = viewDate === todayDate;
+  const isViewingPrev = prevDayDate !== undefined && viewDate === prevDayDate;
+  // viewDate に対応する server todos を選ぶ
+  const activeServerTodos = isViewingPrev
+    ? prevDayTodos
+    : !isViewingToday
+      ? nextDayTodos
+      : todos;
+
   // Issue #44 (optimistic UI): drop 直後にローカル並び替えを即時反映するため、
-  // optimisticTodos を保持する。null = サーバの todos をそのまま使う。
-  // props.todos が変わったら (= refresh で server 値同期完了) optimistic はクリア。
+  // optimisticTodos を保持する。null = サーバの activeServerTodos をそのまま使う。
+  // activeServerTodos (= props 3 日分のどれか、または viewDate 変化) が変わったら
+  // optimistic はクリア。
   const [optimisticTodos, setOptimisticTodos] = useState<TodoRow[] | null>(null);
-  const [prevTodosRef, setPrevTodosRef] = useState(todos);
-  if (todos !== prevTodosRef) {
-    setPrevTodosRef(todos);
+  const [prevSnapshot, setPrevSnapshot] = useState({
+    serverTodos: activeServerTodos,
+    viewDate,
+  });
+  if (
+    activeServerTodos !== prevSnapshot.serverTodos ||
+    viewDate !== prevSnapshot.viewDate
+  ) {
+    setPrevSnapshot({ serverTodos: activeServerTodos, viewDate });
     setOptimisticTodos(null);
   }
-  const effectiveTodos = optimisticTodos ?? todos;
+  const effectiveTodos = optimisticTodos ?? activeServerTodos;
   const byBucket = groupByBucket(effectiveTodos);
 
   // 達成集計は表示用 todos (optimistic 反映後) で再計算。
@@ -122,22 +150,23 @@ export function TodoCard({
 
   // PR #45 review: 削除 / 時間帯変更 も同じ optimisticTodos を介して即時反映する。
   // 各 callback は「server 通信を始める前に呼ばれる」前提。失敗時は revert を呼ぶ。
+  // base は viewDate に対応する activeServerTodos (Issue #46 新方針)。
   const applyOptimisticDelete = useCallback(
     (id: string) => {
       setOptimisticTodos((current) =>
-        applyDeleteOptimistic(current ?? todos, id),
+        applyDeleteOptimistic(current ?? activeServerTodos, id),
       );
     },
-    [todos],
+    [activeServerTodos],
   );
 
   const applyOptimisticBucketChange = useCallback(
     (id: string, newBucket: TodoBucket) => {
       setOptimisticTodos((current) =>
-        applyBucketChangeOptimistic(current ?? todos, id, newBucket),
+        applyBucketChangeOptimistic(current ?? activeServerTodos, id, newBucket),
       );
     },
-    [todos],
+    [activeServerTodos],
   );
 
   const revertOptimistic = useCallback(() => {
@@ -149,11 +178,11 @@ export function TodoCard({
   const applyOptimisticCreate = useCallback(
     (newTodo: TodoRow) => {
       setOptimisticTodos((current) => {
-        const base = current ?? todos;
+        const base = current ?? activeServerTodos;
         return [...base, newTodo];
       });
     },
-    [todos],
+    [activeServerTodos],
   );
 
   // 削除 / 時間帯変更は行が remount するため TodoListRow ローカルの error state は
@@ -211,7 +240,7 @@ export function TodoCard({
     >
       {/* Header */}
       <div
-        className="flex items-baseline justify-between pb-2 mb-2"
+        className="flex items-baseline justify-between pb-2 mb-2 flex-wrap gap-2"
         style={{ borderBottom: "1px dashed var(--color-line-soft)" }}
       >
         <div className="flex items-baseline gap-2 flex-wrap">
@@ -225,7 +254,7 @@ export function TodoCard({
               fontWeight: 600,
             }}
           >
-            本日の ToDo · 時間バケット
+            ToDo · 時間バケット
           </span>
           <span className="sk-mono">
             <span aria-hidden style={{ color: "var(--color-accent)" }}>
@@ -234,10 +263,85 @@ export function TodoCard({
             = 大事な 3 つ
           </span>
         </div>
+        {/* Issue #46 新方針: ToDo セクション内の日付タブ */}
+        {(prevDayDate || nextDayDate) && (
+          <div
+            className="flex items-center gap-1"
+            role="tablist"
+            aria-label="表示する日"
+          >
+            {prevDayDate && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={isViewingPrev}
+                onClick={() => setViewDate(prevDayDate)}
+                className="sk-chip"
+                style={{
+                  background: isViewingPrev
+                    ? "var(--color-ink)"
+                    : "var(--color-bg)",
+                  color: isViewingPrev
+                    ? "var(--color-bg)"
+                    : "var(--color-ink-3)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono), monospace",
+                  cursor: "pointer",
+                }}
+              >
+                前日
+              </button>
+            )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isViewingToday}
+              onClick={() => setViewDate(todayDate)}
+              className="sk-chip"
+              style={{
+                background: isViewingToday
+                  ? "var(--color-ink)"
+                  : "var(--color-bg)",
+                color: isViewingToday
+                  ? "var(--color-bg)"
+                  : "var(--color-ink-3)",
+                fontSize: 11,
+                fontFamily: "var(--font-mono), monospace",
+                cursor: "pointer",
+              }}
+            >
+              今日
+            </button>
+            {nextDayDate && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!isViewingToday && !isViewingPrev}
+                onClick={() => setViewDate(nextDayDate)}
+                className="sk-chip"
+                style={{
+                  background:
+                    !isViewingToday && !isViewingPrev
+                      ? "var(--color-ink)"
+                      : "var(--color-bg)",
+                  color:
+                    !isViewingToday && !isViewingPrev
+                      ? "var(--color-bg)"
+                      : "var(--color-ink-3)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono), monospace",
+                  cursor: "pointer",
+                }}
+              >
+                翌日
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* 朝の引き継ぎ提案 */}
-      {carryProposal.length > 0 && (
+      {/* 朝の引き継ぎ提案 (今日表示時のみ) */}
+      {isViewingToday && carryProposal.length > 0 && (
         <CarryProposalCard
           proposals={carryProposal}
           todayDate={todayDate}
@@ -300,7 +404,8 @@ export function TodoCard({
                     <TodoListRow
                       key={t.id}
                       todo={t}
-                      showCarryAction={showCarryAction}
+                      // carry "→明日" は今日表示時のみ意味があるので、別日表示中は出さない
+                      showCarryAction={isViewingToday && showCarryAction}
                       openMenuId={openMenuId}
                       setOpenMenuId={setOpenMenuId}
                       onOptimisticDelete={applyOptimisticDelete}
@@ -317,7 +422,7 @@ export function TodoCard({
       </DndContext>
 
       <TodoAddRow
-        todayDate={todayDate}
+        todayDate={viewDate}
         timeOfDay={timeOfDay}
         onOptimisticCreate={applyOptimisticCreate}
         onRevertOptimistic={revertOptimistic}

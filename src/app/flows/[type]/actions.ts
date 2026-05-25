@@ -11,6 +11,49 @@ import {
 
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
+export type FindExistingResult =
+  | { ok: true; id: string | null }
+  | { ok: false; error: string };
+
+/** Issue #46 新方針: 朝のセットアップ等で「日付を選んだら既存 record があるか
+ *  チェックして edit モードへ自動切替」するための server action。
+ *  RLS で他人の record は弾かれる。同 (user, type, target_date) で複数 record
+ *  ある場合は最新 (created_at desc) の id を返す。 */
+export async function findExistingRecord(
+  type: FlowType,
+  targetDate: string,
+): Promise<FindExistingResult> {
+  if (!FLOW_TYPES.includes(type)) {
+    return { ok: false, error: `不正なフロー種別: ${type}` };
+  }
+  if (!isValidDateString(targetDate)) {
+    return { ok: false, error: "日付が不正です" };
+  }
+  const normalized = normalizeTargetDate(type, targetDate);
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "ログインが必要です" };
+
+  const { data, error } = await supabase
+    .from("records")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("type", type)
+    .eq("target_date", normalized)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("findExistingRecord failed", error);
+    return { ok: false, error: "既存記録の確認に失敗しました" };
+  }
+  return { ok: true, id: data?.id ?? null };
+}
+
 /** 朝のセットアップで入力された task1/2/3 を todos テーブルに自動連携する。
  *  Issue #38 拡張 (B): 朝の宣言が ToDo 画面に出てこないと「実行する場」と
  *  「宣言する場」が分断されてしまうので、朝の record INSERT 成功時に morning

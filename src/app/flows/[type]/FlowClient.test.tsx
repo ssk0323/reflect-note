@@ -3,12 +3,19 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { morningFlow } from "@/lib/flows/morning";
 import { nightFlow } from "@/lib/flows/night";
+import { toJstDateString } from "@/lib/records/targetDate";
 import { FlowClient } from "./FlowClient";
 
+// テスト実行時の「今日」(JST)。morningFlow は future 方向、nightFlow は past 方向
+// のためどちらも today なら必ず通る。
+const todayKey = toJstDateString(new Date());
+
 const saveFlowRecord = vi.fn();
+const findExistingRecord = vi.fn();
 
 vi.mock("./actions", () => ({
   saveFlowRecord: (...args: unknown[]) => saveFlowRecord(...args),
+  findExistingRecord: (...args: unknown[]) => findExistingRecord(...args),
 }));
 
 const push = vi.fn();
@@ -19,11 +26,12 @@ vi.mock("next/navigation", () => ({
 describe("FlowClient (morning)", () => {
   beforeEach(() => {
     saveFlowRecord.mockReset();
+    findExistingRecord.mockReset();
     push.mockReset();
   });
 
   it("shows the first question with progress 1/5", () => {
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
     expect(
       screen.getByRole("heading", { name: morningFlow.questions[0].title }),
     ).toBeInTheDocument();
@@ -32,7 +40,7 @@ describe("FlowClient (morning)", () => {
 
   it("advances to the next question on 次へ", async () => {
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     await user.click(screen.getByRole("button", { name: "次へ" }));
 
@@ -44,7 +52,7 @@ describe("FlowClient (morning)", () => {
 
   it("goes back to the previous question on 戻る", async () => {
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     await user.click(screen.getByRole("button", { name: "次へ" }));
     await user.click(screen.getByRole("button", { name: "戻る" }));
@@ -55,13 +63,13 @@ describe("FlowClient (morning)", () => {
   });
 
   it("disables 戻る on the first question", () => {
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
     expect(screen.getByRole("button", { name: "戻る" })).toBeDisabled();
   });
 
   it("shows 一覧で確認する on the last question", async () => {
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
@@ -74,7 +82,7 @@ describe("FlowClient (morning)", () => {
 
   it("shows the confirmation screen with entered answers", async () => {
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     // 1問目: goal (textarea) に入力
     await user.type(screen.getByRole("textbox"), "今日の目標テスト");
@@ -97,7 +105,7 @@ describe("FlowClient (morning)", () => {
   it("calls saveFlowRecord with type + answers and redirects on save", async () => {
     saveFlowRecord.mockResolvedValue({ ok: true });
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     await user.type(screen.getByRole("textbox"), "目標");
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
@@ -117,7 +125,7 @@ describe("FlowClient (morning)", () => {
   it("shows error message when saveFlowRecord fails", async () => {
     saveFlowRecord.mockResolvedValue({ ok: false, error: "boom" });
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
@@ -131,7 +139,7 @@ describe("FlowClient (morning)", () => {
   it("shows error message when saveFlowRecord throws", async () => {
     saveFlowRecord.mockRejectedValue(new Error("network down"));
     const user = userEvent.setup();
-    render(<FlowClient flow={morningFlow} />);
+    render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
 
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
@@ -144,15 +152,71 @@ describe("FlowClient (morning)", () => {
 });
 
 
+describe("FlowClient date selection step (Issue #46)", () => {
+  beforeEach(() => {
+    saveFlowRecord.mockReset();
+    findExistingRecord.mockReset();
+    push.mockReset();
+  });
+
+  it("initialDate が無いときは「いつのぶんを書きますか？」を最初に出す", () => {
+    render(<FlowClient flow={morningFlow} />);
+    expect(
+      screen.getByRole("heading", { name: "いつのぶんを書きますか？" }),
+    ).toBeInTheDocument();
+    // 質問はまだ表示されない
+    expect(
+      screen.queryByRole("heading", { name: morningFlow.questions[0].title }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("「次へ」で findExistingRecord が呼ばれ、既存無しなら質問 1 へ進む", async () => {
+    findExistingRecord.mockResolvedValue({ ok: true, id: null });
+    const user = userEvent.setup();
+    render(<FlowClient flow={morningFlow} />);
+    await user.click(screen.getByRole("button", { name: "次へ" }));
+    expect(findExistingRecord).toHaveBeenCalledWith(
+      "morning",
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    );
+    // 既存無しなので質問 1 が表示される
+    expect(
+      await screen.findByRole("heading", { name: morningFlow.questions[0].title }),
+    ).toBeInTheDocument();
+  });
+
+  it("「次へ」で既存 record が見つかったら /flows/morning?edit=<id> に router.push", async () => {
+    findExistingRecord.mockResolvedValue({ ok: true, id: "rec-123" });
+    const user = userEvent.setup();
+    render(<FlowClient flow={morningFlow} />);
+    await user.click(screen.getByRole("button", { name: "次へ" }));
+    await vi.waitFor(() =>
+      expect(push).toHaveBeenCalledWith("/flows/morning?edit=rec-123"),
+    );
+  });
+
+  it("findExistingRecord エラー時は alert を出す", async () => {
+    findExistingRecord.mockResolvedValue({
+      ok: false,
+      error: "確認失敗",
+    });
+    const user = userEvent.setup();
+    render(<FlowClient flow={morningFlow} />);
+    await user.click(screen.getByRole("button", { name: "次へ" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("確認失敗");
+  });
+});
+
 describe("FlowClient (night, group question)", () => {
   beforeEach(() => {
     saveFlowRecord.mockReset();
+    findExistingRecord.mockReset();
     push.mockReset();
   });
 
   it("renders the timeUsage group with 4 sub-fields", async () => {
     const user = userEvent.setup();
-    render(<FlowClient flow={nightFlow} />);
+    render(<FlowClient flow={nightFlow} initialDate={todayKey} />);
 
     // timeUsage は 6 問目 (index 5)。5 回「次へ」で到達
     for (let i = 0; i < 5; i++) {
@@ -171,7 +235,7 @@ describe("FlowClient (night, group question)", () => {
   it("saves group-field answers under their own keys", async () => {
     saveFlowRecord.mockResolvedValue({ ok: true });
     const user = userEvent.setup();
-    render(<FlowClient flow={nightFlow} />);
+    render(<FlowClient flow={nightFlow} initialDate={todayKey} />);
 
     // timeUsage の画面まで進める
     for (let i = 0; i < 5; i++) {

@@ -709,4 +709,89 @@ describe("TodoCard", () => {
     });
     expect(moveTodo).not.toHaveBeenCalled();
   });
+
+  // ----------------------------------------------------------------------------
+  // Date tabs (Issue #46 新方針)
+  // ----------------------------------------------------------------------------
+
+  it("prevDayDate / nextDayDate を渡すと「前日 / 今日 / 翌日」タブが出る", () => {
+    render(
+      <TodoCard
+        todos={[todo({ id: "a", text: "今日のタスク" })]}
+        prevDayTodos={[todo({ id: "b", text: "前日のタスク" })]}
+        nextDayTodos={[todo({ id: "c", text: "翌日のタスク" })]}
+        todayDate="2026-05-26"
+        prevDayDate="2026-05-25"
+        nextDayDate="2026-05-27"
+        showCarryAction={false}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "前日" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "今日" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "翌日" })).toBeInTheDocument();
+    // 初期表示は今日
+    expect(screen.getByText("今日のタスク")).toBeInTheDocument();
+    expect(screen.queryByText("前日のタスク")).not.toBeInTheDocument();
+  });
+
+  it("翌日タブをクリックすると翌日の todos が表示される", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "a", text: "今日のタスク" })]}
+        nextDayTodos={[todo({ id: "c", text: "翌日のタスク" })]}
+        todayDate="2026-05-26"
+        nextDayDate="2026-05-27"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("tab", { name: "翌日" }));
+    expect(screen.getByText("翌日のタスク")).toBeInTheDocument();
+    expect(screen.queryByText("今日のタスク")).not.toBeInTheDocument();
+  });
+
+  it("翌日タブで新規 ToDo を追加すると createTodo が翌日 date で呼ばれる", async () => {
+    createTodo.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[]}
+        nextDayTodos={[]}
+        todayDate="2026-05-26"
+        nextDayDate="2026-05-27"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("tab", { name: "翌日" }));
+    const input = screen.getByLabelText("タスクの内容");
+    await user.type(input, "明日のタスク{Enter}");
+    expect(createTodo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "明日のタスク",
+        targetDate: "2026-05-27",
+      }),
+    );
+  });
+
+  it("別日表示中は「→明日」carry ボタンが出ない", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "a", text: "今日タスク" })]}
+        nextDayTodos={[todo({ id: "c", text: "明日タスク" })]}
+        todayDate="2026-05-26"
+        nextDayDate="2026-05-27"
+        showCarryAction
+      />,
+    );
+    // 今日表示時は「明日に引き継ぐ」ボタンが出る
+    expect(
+      screen.getByLabelText("「今日タスク」を明日に引き継ぐ"),
+    ).toBeInTheDocument();
+    // 翌日タブに切替後、carry ボタンは消える
+    await user.click(screen.getByRole("tab", { name: "翌日" }));
+    expect(
+      screen.queryByLabelText("「明日タスク」を明日に引き継ぐ"),
+    ).not.toBeInTheDocument();
+  });
 });

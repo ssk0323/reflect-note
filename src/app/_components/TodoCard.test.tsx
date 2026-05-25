@@ -257,7 +257,9 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
-    // 再 render 後、useEffect で local state が同期される
+    // 再 render 中に「prev props と比較して setState」する React 公式パターン
+    // (Storing information from previous renders) で local state が同期される。
+    // useEffect ではないので set-state-in-effect lint には引っかからない。
     expect(screen.getByRole("checkbox", { name: /X/ })).toBeChecked();
   });
 

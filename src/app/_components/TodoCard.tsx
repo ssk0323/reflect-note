@@ -410,19 +410,31 @@ function TodoListRow({
         className="flex items-center gap-2 min-w-0"
         style={{ gridColumn: "1 / span 2" }}
       >
-        <input
-          id={inputId}
-          type="checkbox"
-          checked={checked}
-          onChange={handleToggle}
-          disabled={isPending}
-          aria-label={`完了: ${currentText}`}
-          className="h-4 w-4 cursor-pointer rounded-sm flex-shrink-0"
-          style={{
-            borderColor: "var(--color-ink-2)",
-            accentColor: "var(--color-accent)",
-          }}
-        />
+        {/* checkbox 単体 (h-4 w-4) は 16x16 でタッチターゲットが小さいので、
+            label でラップして周囲も hit 領域にする。label には文字を入れず、
+            input に aria-label でアクセシブル名を付ける (label は装飾用)。
+            sk-tap-target で coarse pointer 時 min-height 44px。
+            テキスト tap で編集モードに入る挙動は別の button が担うので、
+            この label には text/onClick を載せない (toggle 専用)。 */}
+        <label
+          htmlFor={inputId}
+          className="sk-tap-target flex items-center justify-center cursor-pointer flex-shrink-0"
+          style={{ minWidth: 44, padding: "0 4px" }}
+        >
+          <input
+            id={inputId}
+            type="checkbox"
+            checked={checked}
+            onChange={handleToggle}
+            disabled={isPending}
+            aria-label={`完了: ${currentText}`}
+            className="h-4 w-4 cursor-pointer rounded-sm"
+            style={{
+              borderColor: "var(--color-ink-2)",
+              accentColor: "var(--color-accent)",
+            }}
+          />
+        </label>
         {todo.important && (
           <span
             aria-hidden

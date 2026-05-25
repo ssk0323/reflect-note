@@ -7,7 +7,7 @@ import { FlowClient } from "./FlowClient";
 
 type PageProps = {
   params: Promise<{ type: string }>;
-  searchParams: Promise<{ edit?: string }>;
+  searchParams: Promise<{ edit?: string; date?: string }>;
 };
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
     notFound();
   }
 
-  const { edit } = await searchParams;
+  const { edit, date } = await searchParams;
 
   if (edit) {
     const supabase = await createSupabaseServerClient();
@@ -59,5 +59,5 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
     );
   }
 
-  return <FlowClient flow={flow} />;
+  return <FlowClient flow={flow} initialDate={date} />;
 }

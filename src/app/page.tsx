@@ -15,6 +15,7 @@ import {
   addDays,
   addMonths,
   diffDays,
+  isValidDateString,
   resolveRecordDate,
   startOfJstMonth,
   startOfJstWeek,
@@ -31,6 +32,7 @@ import {
 import { YesterdayMessage } from "./_components/YesterdayMessage";
 import { GoalsStrip } from "./_components/GoalsStrip";
 import { TodoCard } from "./_components/TodoCard";
+import { DateNavigator } from "./_components/DateNavigator";
 
 export const dynamic = "force-dynamic";
 
@@ -153,7 +155,11 @@ function formatYesterdayMeta(created: Date, now: Date): string {
   ).format(created);
 }
 
-export default async function Home() {
+type HomePageProps = {
+  searchParams?: Promise<{ date?: string }>;
+};
+
+export default async function Home({ searchParams }: HomePageProps) {
   const supabase = await createSupabaseServerClient();
   const now = new Date();
   const jstHour = getJstHour(now);
@@ -163,12 +169,22 @@ export default async function Home() {
   //  Round 11 Copilot review)。これをやらないと 01:00 で「夜モード」かつ
   // 「今日 ToDo を carry」のような矛盾が起きる。
   const calendarTodayKey = toJstDateString(now);
-  const todayKey =
+  const businessTodayKey =
     jstHour < 4 ? addDays(calendarTodayKey, -1) : calendarTodayKey;
+  const businessTomorrowKey = addDays(businessTodayKey, 1);
+
+  // Issue #46: 表示中の日付。?date= で指定された場合は (バリデーション後) それを採用、
+  // 未指定 or 不正なら business day の今日。
+  const dateParam = (await searchParams)?.date;
+  const todayKey =
+    dateParam && isValidDateString(dateParam) ? dateParam : businessTodayKey;
+  const isViewingToday = todayKey === businessTodayKey;
+
   // 表示用 (date meta) / streak 計算用に business day を表す Date を作る。
   // 正午にしておけば JST→UTC 変換時の off-by-one を避けられる。
+  // streak は実時刻 (business day) ベースで計算するので businessTodayKey を使う。
   const businessNow =
-    jstHour < 4 ? new Date(`${todayKey}T12:00:00+09:00`) : now;
+    jstHour < 4 ? new Date(`${businessTodayKey}T12:00:00+09:00`) : now;
 
   // 過去 STREAK_LOOKBACK_DAYS 日分の records を 1 query で取得する。
   const lookbackShifted = new Date(
@@ -242,11 +258,13 @@ export default async function Home() {
     monthEndExclusive,
   );
 
-  // ToDo: 今日のリスト + 昨日の未完了 (朝の時間帯のみ提案表示)
+  // ToDo: 表示日 (= 今日 or 別日) のリスト。
+  // 昨日の未完了の carry 提案は「今日を見ている朝モード」の時だけ意味があるので
+  // それ以外 (= 明日を見ている等) はスキップ (Issue #46)。
   const { todos, error: todosError } = await fetchTodosForDate(todayKey);
   const timeOfDay = pickTimeOfDay(now);
   const { todos: yesterdayPending, error: yesterdayPendingError } =
-    timeOfDay === "morning"
+    isViewingToday && timeOfDay === "morning"
       ? await fetchYesterdayPendingTodos(todayKey)
       : { todos: [], error: null };
 
@@ -273,7 +291,7 @@ export default async function Home() {
     {
       kind: "morning",
       done: !!todayMorning,
-      active: timeOfDay === "morning" && !todayMorning,
+      active: isViewingToday && timeOfDay === "morning" && !todayMorning,
       doneTime: todayMorning
         ? new Intl.DateTimeFormat("en-GB", {
             timeZone: "Asia/Tokyo",
@@ -281,14 +299,17 @@ export default async function Home() {
             minute: "2-digit",
           }).format(new Date(todayMorning.created_at))
         : undefined,
+      // Issue #46: 表示日に record が無ければ ?date= 付きで create リンクに
       href: todayMorning
         ? `/flows/morning?edit=${todayMorning.id}`
-        : "/flows/morning",
+        : isViewingToday
+          ? "/flows/morning"
+          : `/flows/morning?date=${todayKey}`,
     },
     {
       kind: "evening",
       done: !!todayNight,
-      active: timeOfDay === "evening" && !todayNight,
+      active: isViewingToday && timeOfDay === "evening" && !todayNight,
       doneTime: todayNight
         ? new Intl.DateTimeFormat("en-GB", {
             timeZone: "Asia/Tokyo",
@@ -296,7 +317,11 @@ export default async function Home() {
             minute: "2-digit",
           }).format(new Date(todayNight.created_at))
         : undefined,
-      href: todayNight ? `/flows/night?edit=${todayNight.id}` : "/flows/night",
+      href: todayNight
+        ? `/flows/night?edit=${todayNight.id}`
+        : isViewingToday
+          ? "/flows/night"
+          : `/flows/night?date=${todayKey}`,
     },
     // 週/月の振り返りボタンは「常に表示」(チャットの仕様確認より)。
     // 完了済 (今週/今月の review record あり) なら done=true + doneTime + edit href。
@@ -366,8 +391,33 @@ export default async function Home() {
         style={{ borderBottom: "1px dashed var(--color-line)" }}
       >
         <div>
-          <p className="sk-eyebrow">{dateMeta}</p>
+          <p className="sk-eyebrow">
+            {dateMeta}
+            {!isViewingToday && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  padding: "2px 8px",
+                  background: "var(--color-accent)",
+                  color: "var(--color-bg)",
+                  borderRadius: 10,
+                  fontSize: 10,
+                  letterSpacing: "0.08em",
+                }}
+              >
+                {todayKey === businessTomorrowKey ? "明日を計画中" : "別日を表示中"}
+              </span>
+            )}
+          </p>
           <p className="sk-h mt-0.5">{greeting}</p>
+          {/* Issue #46: 表示日セレクタ */}
+          <div className="mt-2">
+            <DateNavigator
+              viewDate={todayKey}
+              todayDate={businessTodayKey}
+              tomorrowDate={businessTomorrowKey}
+            />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <HeaderRitualButtons rituals={rituals} />
@@ -439,12 +489,13 @@ export default async function Home() {
         monthRemainingLabel={`残り ${daysToMonthEnd}日`}
       />
 
-      {/* ToDo カード */}
+      {/* ToDo カード。Issue #46: showCarryAction は「今日表示の evening」のみ
+          (明日表示中に carry → "明日の翌日" は通常使わない)。 */}
       <TodoCard
         todos={todos}
         todayDate={todayKey}
         timeOfDay={timeOfDay}
-        showCarryAction={timeOfDay === "evening"}
+        showCarryAction={isViewingToday && timeOfDay === "evening"}
         carryProposal={yesterdayPending}
       />
     </main>

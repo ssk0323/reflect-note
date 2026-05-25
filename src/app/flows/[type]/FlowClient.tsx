@@ -3,22 +3,39 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Flow, FlowAnswers, Question } from "@/lib/flows";
-import { defaultDateOptions, formatTargetLabel } from "@/lib/records/targetDate";
+import {
+  defaultDateOptions,
+  formatTargetLabel,
+  isAllowedDirection,
+  isValidDateString,
+  normalizeTargetDate,
+} from "@/lib/records/targetDate";
 import { saveFlowRecord } from "./actions";
 import { FlowDateChips } from "./FlowDateChips";
 
 type Props = {
   flow: Flow;
+  /** Issue #46: ?date=YYYY-MM-DD で初期 targetDate を pre-fill する経路。
+   *  Home の date selector から「別日の morning を作る」リンクで使う。 */
+  initialDate?: string;
 };
 
-export function FlowClient({ flow }: Props) {
+export function FlowClient({ flow, initialDate }: Props) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<FlowAnswers>({});
-  // target_date のデフォルトはそのフローの「今」(defaultDateOptions の先頭)
-  const [targetDate, setTargetDate] = useState<string>(
-    () => defaultDateOptions(flow.type)[0].value,
-  );
+  // target_date のデフォルト: ?date= で受け取った値があり、かつ flow の direction
+  // 制約 (例: morning は未来も OK、weeklyReview は過去のみ等) を満たせばそれを採用。
+  // 不正なら従来の「フローの今」(defaultDateOptions[0]) にフォールバック。
+  const [targetDate, setTargetDate] = useState<string>(() => {
+    if (initialDate && isValidDateString(initialDate)) {
+      const normalized = normalizeTargetDate(flow.type, initialDate);
+      if (isAllowedDirection(flow.type, normalized, new Date())) {
+        return normalized;
+      }
+    }
+    return defaultDateOptions(flow.type)[0].value;
+  });
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();

@@ -75,6 +75,9 @@ export function EditClient({
             type={flow.type}
             value={targetDate}
             onChange={setTargetDate}
+            // Issue #46: 編集中は日付を変えられない (誤って target_date を
+            // 別日に動かして当日の記録を消したように見せる挙動を防ぐ)
+            readOnly
           />
         </div>
 

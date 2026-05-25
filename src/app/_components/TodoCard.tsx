@@ -11,6 +11,22 @@ import {
 // useEffect は menu の外側クリック/Escape 検知でのみ使用 (setState in effect 警告対象外)
 import { useRouter } from "next/navigation";
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   TODO_BUCKETS,
   TODO_BUCKET_LABEL,
   type TodoBucket,
@@ -21,10 +37,18 @@ import {
   carryTodoToTomorrow,
   createTodo,
   deleteTodo,
-  reorderTodo,
+  moveTodo,
   toggleTodoDone,
   updateTodo,
 } from "@/app/_todos/actions";
+// reorderTodo は ↑↓ ボタン削除 (Issue #44) に伴い UI からは呼ばれなくなった。
+// server action / RPC は互換性のため残してある。
+import {
+  applyBucketChangeOptimistic,
+  applyDeleteOptimistic,
+  applyMoveOptimistic,
+  computeMoveTarget,
+} from "./computeMoveTarget";
 
 /** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
  *  の生 error をそのまま出さないようにする (team review 2 周目 P2)。
@@ -50,17 +74,130 @@ export function TodoCard({
   carryProposal = [],
   timeOfDay = "day",
 }: Props) {
-  const byBucket = groupByBucket(todos);
+  const router = useRouter();
 
-  // 達成集計はサーバから来た todos で常に再計算 (P2 toggle 後の集計未更新を解消)。
-  const total = todos.length;
-  const doneCount = todos.filter((t) => t.done).length;
-  const starDone = todos.filter((t) => t.important && t.done).length;
-  const starTotal = todos.filter((t) => t.important).length;
+  // Issue #44 (optimistic UI): drop 直後にローカル並び替えを即時反映するため、
+  // optimisticTodos を保持する。null = サーバの todos をそのまま使う。
+  // props.todos が変わったら (= refresh で server 値同期完了) optimistic はクリア。
+  const [optimisticTodos, setOptimisticTodos] = useState<TodoRow[] | null>(null);
+  const [prevTodosRef, setPrevTodosRef] = useState(todos);
+  if (todos !== prevTodosRef) {
+    setPrevTodosRef(todos);
+    setOptimisticTodos(null);
+  }
+  const effectiveTodos = optimisticTodos ?? todos;
+  const byBucket = groupByBucket(effectiveTodos);
+
+  // 達成集計は表示用 todos (optimistic 反映後) で再計算。
+  const total = effectiveTodos.length;
+  const doneCount = effectiveTodos.filter((t) => t.done).length;
+  const starDone = effectiveTodos.filter(
+    (t) => t.important && t.done,
+  ).length;
+  const starTotal = effectiveTodos.filter((t) => t.important).length;
 
   // 1 行だけ menu を open にするための global close 機構 (a11y P0)。
   // 各 TodoListRow が menuToken を保持し、別 row が open になったら自分は閉じる。
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  // Issue #44: ハンドル drag (@dnd-kit)。bucket 順に flatten した sortable 配列を作る。
+  // bucket 内の順序は byBucket がソート済み。各 row は useSortable で id を登録。
+  // 全 bucket 共通の SortableContext 1 つで、bucket 跨ぎ drag も成立する。
+  const flatItems = TODO_BUCKETS.flatMap((b) =>
+    byBucket[b].map((t) => ({ id: t.id, bucket: b })),
+  );
+  const flatIds = flatItems.map((t) => t.id);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const [, startReorderTransition] = useTransition();
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // 5px 動かさないと drag 開始しない。タップ操作 (= clickなど) と区別。
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  // PR #45 review: 削除 / 時間帯変更 も同じ optimisticTodos を介して即時反映する。
+  // 各 callback は「server 通信を始める前に呼ばれる」前提。失敗時は revert を呼ぶ。
+  const applyOptimisticDelete = useCallback(
+    (id: string) => {
+      setOptimisticTodos((current) =>
+        applyDeleteOptimistic(current ?? todos, id),
+      );
+    },
+    [todos],
+  );
+
+  const applyOptimisticBucketChange = useCallback(
+    (id: string, newBucket: TodoBucket) => {
+      setOptimisticTodos((current) =>
+        applyBucketChangeOptimistic(current ?? todos, id, newBucket),
+      );
+    },
+    [todos],
+  );
+
+  const revertOptimistic = useCallback(() => {
+    setOptimisticTodos(null);
+  }, []);
+
+  // 新規追加の楽観 UI: TodoAddRow から渡された全フィールド入り todo を即座に
+  // optimisticTodos に追加。server INSERT も同じ id で投げる → refresh で同期。
+  const applyOptimisticCreate = useCallback(
+    (newTodo: TodoRow) => {
+      setOptimisticTodos((current) => {
+        const base = current ?? todos;
+        return [...base, newTodo];
+      });
+    },
+    [todos],
+  );
+
+  // 削除 / 時間帯変更は行が remount するため TodoListRow ローカルの error state は
+  // 失われる。エラー表示は親 (TodoCard) に lift して banner で出す。
+  const setRowError = useCallback((msg: string | null) => {
+    setReorderError(msg);
+  }, []);
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over) return;
+    const activeId = String(active.id);
+    const target = computeMoveTarget(flatItems, activeId, String(over.id));
+    if (target === null) return;
+
+    // Issue #44 (optimistic UI): drop 即時に local 並び替えを反映して
+    // server の round-trip 待ちを隠す。失敗時は props.todos に戻す (= null) で
+    // rollback、成功時は router.refresh() で server 値と同期 → 自然に optimistic
+    // クリア (props.todos !== prevTodosRef の分岐)。
+    const optimistic = applyMoveOptimistic(
+      effectiveTodos,
+      activeId,
+      target.bucket,
+      target.position,
+    );
+    setOptimisticTodos(optimistic);
+    setReorderError(null);
+
+    startReorderTransition(async () => {
+      try {
+        const r = await moveTodo(activeId, target.bucket, target.position);
+        if (r.ok) {
+          router.refresh();
+        } else {
+          setOptimisticTodos(null);
+          setReorderError(r.error ?? "並び替えに失敗しました");
+        }
+      } catch (e) {
+        setOptimisticTodos(null);
+        console.error("moveTodo threw", redactClientError(e));
+        setReorderError("並び替えに失敗しました");
+      }
+    });
+  }
 
   return (
     <article
@@ -107,54 +244,84 @@ export function TodoCard({
         />
       )}
 
-      {/* バケットごとのリスト */}
-      {TODO_BUCKETS.map((bucket) => {
-        const items = byBucket[bucket];
-        if (items.length === 0) return null;
-        const bDone = items.filter((t) => t.done).length;
-        return (
-          <section
-            key={bucket}
-            aria-label={`${TODO_BUCKET_LABEL[bucket]}のタスク`}
-            className="mb-3"
-          >
-            <div
-              className="flex items-baseline gap-2 pb-1"
-              style={{ borderBottom: "1px solid var(--color-line)" }}
-            >
-              <span
-                style={{
-                  fontFamily: "var(--font-mono), monospace",
-                  fontSize: 10,
-                  letterSpacing: "0.14em",
-                  color: "var(--color-ink-3)",
-                  textTransform: "uppercase",
-                }}
-              >
-                {TODO_BUCKET_LABEL[bucket]}
-              </span>
-              <span className="sk-mono" style={{ color: "var(--color-ink-4)" }}>
-                · {bDone} / {items.length}
-              </span>
-            </div>
-            <div>
-              {items.map((t, idx) => (
-                <TodoListRow
-                  key={t.id}
-                  todo={t}
-                  isFirst={idx === 0}
-                  isLast={idx === items.length - 1}
-                  showCarryAction={showCarryAction}
-                  openMenuId={openMenuId}
-                  setOpenMenuId={setOpenMenuId}
-                />
-              ))}
-            </div>
-          </section>
-        );
-      })}
+      {/* 並び替えエラー (Issue #44) */}
+      {reorderError && (
+        <p
+          role="alert"
+          className="sk-mono mb-2"
+          style={{ color: "var(--color-warn)" }}
+        >
+          {reorderError}
+        </p>
+      )}
 
-      <TodoAddRow todayDate={todayDate} timeOfDay={timeOfDay} />
+      {/* バケットごとのリスト。全 bucket を 1 つの DndContext + SortableContext で
+          包み、bucket 跨ぎ drag も同じ context 内で扱う (Issue #44)。 */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
+          {TODO_BUCKETS.map((bucket) => {
+            const items = byBucket[bucket];
+            if (items.length === 0) return null;
+            const bDone = items.filter((t) => t.done).length;
+            return (
+              <section
+                key={bucket}
+                aria-label={`${TODO_BUCKET_LABEL[bucket]}のタスク`}
+                className="mb-3"
+              >
+                <div
+                  className="flex items-baseline gap-2 pb-1"
+                  style={{ borderBottom: "1px solid var(--color-line)" }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono), monospace",
+                      fontSize: 10,
+                      letterSpacing: "0.14em",
+                      color: "var(--color-ink-3)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {TODO_BUCKET_LABEL[bucket]}
+                  </span>
+                  <span
+                    className="sk-mono"
+                    style={{ color: "var(--color-ink-4)" }}
+                  >
+                    · {bDone} / {items.length}
+                  </span>
+                </div>
+                <div>
+                  {items.map((t) => (
+                    <TodoListRow
+                      key={t.id}
+                      todo={t}
+                      showCarryAction={showCarryAction}
+                      openMenuId={openMenuId}
+                      setOpenMenuId={setOpenMenuId}
+                      onOptimisticDelete={applyOptimisticDelete}
+                      onOptimisticBucketChange={applyOptimisticBucketChange}
+                      onRevertOptimistic={revertOptimistic}
+                      onSetRowError={setRowError}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </SortableContext>
+      </DndContext>
+
+      <TodoAddRow
+        todayDate={todayDate}
+        timeOfDay={timeOfDay}
+        onOptimisticCreate={applyOptimisticCreate}
+        onRevertOptimistic={revertOptimistic}
+      />
 
       {/* Footer */}
       <div
@@ -166,7 +333,7 @@ export function TodoCard({
           {starTotal > 0 && ` · 大事な3つ ${starDone}/${starTotal}`}
         </span>
         <span className="sk-mono" style={{ color: "var(--color-ink-4)" }}>
-          ↑↓ で並び替え
+          ≡ をドラッグで並び替え
         </span>
       </div>
     </article>
@@ -195,19 +362,40 @@ function groupByBucket(todos: TodoRow[]): Record<TodoBucket, TodoRow[]> {
 
 function TodoListRow({
   todo,
-  isFirst,
-  isLast,
   showCarryAction,
   openMenuId,
   setOpenMenuId,
+  onOptimisticDelete,
+  onOptimisticBucketChange,
+  onRevertOptimistic,
+  onSetRowError,
 }: {
   todo: TodoRow;
-  isFirst: boolean;
-  isLast: boolean;
   showCarryAction: boolean;
   openMenuId: string | null;
   setOpenMenuId: (id: string | null) => void;
+  onOptimisticDelete: (id: string) => void;
+  onOptimisticBucketChange: (id: string, newBucket: TodoBucket) => void;
+  onRevertOptimistic: () => void;
+  /** 削除 / bucket 変更で行が remount されると local error state が消えるので、
+   *  親に lift して banner で表示する。 */
+  onSetRowError: (msg: string | null) => void;
 }) {
+  // Issue #44: useSortable で row を drag 対象に。listeners は handle ≡ にのみ付け、
+  // 行本体は通常の checkbox/編集操作のまま。
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: todo.id });
+  const sortableStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [checked, setChecked] = useState(todo.done);
@@ -247,7 +435,8 @@ function TodoListRow({
   }, [isEditingText]);
 
   function startEditingText() {
-    if (isPending) return;
+    // PR #45 review: isPending ガードは撤去。row 共有の useTransition を介して
+    // 他操作 (toggle 等) の進行中に編集をブロックする経路だったため。
     setDraftText(currentText);
     setError(null);
     setIsEditingText(true);
@@ -307,21 +496,30 @@ function TodoListRow({
   function commitBucketEdit(newBucket: TodoBucket) {
     setIsEditingBucket(false);
     if (newBucket === todo.bucket) return;
-    setError(null);
+    onSetRowError(null);
+    // 楽観 UI: 即座に新 bucket の末尾に動かしておく。失敗時 revert。
+    onOptimisticBucketChange(todo.id, newBucket);
     startTransition(async () => {
       try {
         const r = await updateTodo(todo.id, { bucket: newBucket });
-        if (r.ok) refresh();
-        else setError(r.error ?? "保存に失敗しました");
+        if (r.ok) {
+          refresh();
+        } else {
+          onRevertOptimistic();
+          // 行が remount するので親のエラー banner に出す
+          onSetRowError(r.error ?? "保存に失敗しました");
+        }
       } catch (e) {
+        onRevertOptimistic();
         console.error("updateTodo bucket threw", redactClientError(e));
-        setError("保存に失敗しました");
+        onSetRowError("保存に失敗しました");
       }
     });
   }
 
   function handleToggle() {
-    if (isPending) return;
+    // PR #45 review: isPending ガード撤去。連続 toggle は server 側で順序処理され
+    // 最終的に last write wins + refresh で UI 同期。実用上競合は発生しない。
     const previous = checked;
     const next = !previous;
     setChecked(next);
@@ -344,23 +542,13 @@ function TodoListRow({
     });
   }
 
-  function handleReorder(direction: "up" | "down") {
-    if (isPending) return;
-    setError(null);
-    startTransition(async () => {
-      try {
-        const r = await reorderTodo(todo.id, direction);
-        if (r.ok) refresh();
-        else setError(r.error ?? "並び替えに失敗しました");
-      } catch (e) {
-        console.error("reorderTodo threw", redactClientError(e));
-        setError("並び替えに失敗しました");
-      }
-    });
-  }
+  // Issue #44: ↑↓ ボタンはハンドル drag に一本化されたため削除。
+  // reorderTodo server action / RPC は残してあるが UI からは呼ばない。
 
   function handleCarry() {
-    if (isPending) return;
+    // PR #45 review: isPending ガード撤去。carry の二重 click は server 側の
+    // 部分 UNIQUE (todos_unique_carry_idem_idx) が 23505 で重複 INSERT を弾き、
+    // tryInsertWithPosition が carryDuplicate=true として冪等成功を返す。
     setError(null);
     startTransition(async () => {
       try {
@@ -375,31 +563,46 @@ function TodoListRow({
   }
 
   function handleDelete() {
-    if (isPending) return;
+    // PR #45 review: isPending ガード撤去。confirm 確認はそのまま残すので
+    // 暴発リスクは低い。連続削除は 2 回目が「対象 ToDo が見つかりません」エラーで
+    // 自然に fail (= 同じ row を 2 回 delete することは起きない構造)。
     if (!window.confirm("このタスクを削除しますか？")) return;
-    setError(null);
+    onSetRowError(null);
+    // 楽観 UI: 即座に行を消す。失敗で revert。
+    onOptimisticDelete(todo.id);
     startTransition(async () => {
       try {
         const r = await deleteTodo(todo.id);
         if (r.ok) refresh();
-        else setError(r.error ?? "削除に失敗しました");
+        else {
+          onRevertOptimistic();
+          // 行が remount するので親のエラー banner に出す
+          onSetRowError(r.error ?? "削除に失敗しました");
+        }
       } catch (e) {
+        onRevertOptimistic();
         console.error("deleteTodo threw", redactClientError(e));
-        setError("削除に失敗しました");
+        onSetRowError("削除に失敗しました");
       }
     });
   }
 
   return (
     <div
+      ref={setNodeRef}
       role="group"
       aria-busy={isPending}
       className="grid items-center gap-2 py-2"
       style={{
+        ...sortableStyle,
         gridTemplateColumns: "auto 1fr auto",
         padding: todo.important ? "10px 4px" : "7px 4px",
         borderBottom: "1px dashed var(--color-line-soft)",
-        opacity: isPending ? 0.6 : 1,
+        // PR #45 review: 楽観 UI で表示は既に確定済みなので server 通信中の
+        // dim (`isPending ? 0.6 : 1`) は誤解の元 (= まだ未確定に見える)。
+        // sortableStyle.opacity (drag 中 0.5) だけ尊重し、isPending 由来の
+        // dim は外す。button の disabled は二重 submit 防止のため残す。
+        opacity: sortableStyle.opacity ?? 1,
       }}
     >
       {/* 左: checkbox + 重要マーク + テキスト (タップで編集モードへ; Issue #40)。
@@ -426,7 +629,9 @@ function TodoListRow({
             type="checkbox"
             checked={checked}
             onChange={handleToggle}
-            disabled={isPending}
+            // PR #45 review: disabled={isPending} を外す。browser の disabled
+            // ネイティブ styling (半透明グレー) が「処理中=未確定」に見えるため。
+            // 同時に handleToggle 側の isPending ガードも撤去 → 連続クリック OK。
             aria-label={`完了: ${currentText}`}
             className="h-4 w-4 cursor-pointer rounded-sm"
             style={{
@@ -456,7 +661,9 @@ function TodoListRow({
             onChange={(e) => setDraftText(e.target.value)}
             onKeyDown={handleTextKeyDown}
             onBlur={commitTextEdit}
-            disabled={isPending}
+            // PR #45 review: disabled は外す (gray-out 回避)。
+            // commit は setIsEditingText(false) で input 自体が消えるので
+            // 二重 commit のリスクはほぼ無い。
             maxLength={500}
             aria-label="タスク本文を編集"
             // 編集中の input も coarse pointer で 44px hit area を確保
@@ -478,7 +685,8 @@ function TodoListRow({
           <button
             type="button"
             onClick={startEditingText}
-            disabled={isPending}
+            // PR #45 review: disabled は外す (gray-out 回避)。連続編集 OK
+            // (server 側で last write wins、refresh で UI 同期)。
             // aria-label に重要フラグも含める (button に aria-label を付けると
             // 子要素の sr-only がアクセシブル名計算から除外されるため;
             // PR #41 round 3 Copilot review)。
@@ -614,14 +822,32 @@ function TodoListRow({
             <span aria-hidden>→</span>明日
           </button>
         )}
-        <ReorderButtons
-          onUp={() => handleReorder("up")}
-          onDown={() => handleReorder("down")}
-          isFirst={isFirst}
-          isLast={isLast}
+        {/* Issue #44: ハンドル ≡ (タッチ/マウスで掴んでドラッグ、キーボードでも操作可)。
+            attributes + listeners はハンドル単独に付けることで、行本体タップは
+            編集モードのまま守られる (タップ誤操作防止)。 */}
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
           disabled={isPending}
-          taskName={todo.text}
-        />
+          aria-label={`「${currentText}」をドラッグして並び替え`}
+          className="sk-tap-target"
+          style={{
+            minWidth: 32,
+            padding: "8px 6px",
+            background: "transparent",
+            color: "var(--color-ink-3)",
+            border: "none",
+            borderRadius: 6,
+            cursor: isDragging ? "grabbing" : "grab",
+            fontSize: 18,
+            fontFamily: "var(--font-mono), monospace",
+            touchAction: "none",
+            lineHeight: 1,
+          }}
+        >
+          ≡
+        </button>
         <TodoRowMenu
           todo={todo}
           isOpen={openMenuId === todo.id}
@@ -642,68 +868,6 @@ function TodoListRow({
           {error}
         </p>
       )}
-    </div>
-  );
-}
-
-function ReorderButtons({
-  onUp,
-  onDown,
-  isFirst,
-  isLast,
-  disabled,
-  taskName,
-}: {
-  onUp: () => void;
-  onDown: () => void;
-  isFirst: boolean;
-  isLast: boolean;
-  disabled: boolean;
-  taskName: string;
-}) {
-  // ↑↓ は縦並びだが、タップターゲットは横幅もしっかり確保 (44px)。
-  return (
-    <div
-      className="flex flex-col"
-      role="group"
-      aria-label={`${taskName} の並び替え`}
-    >
-      <button
-        type="button"
-        onClick={onUp}
-        disabled={disabled || isFirst}
-        aria-label="このタスクを上に移動"
-        className="sk-mono"
-        style={{
-          color: isFirst ? "var(--color-ink-4)" : "var(--color-ink-3)",
-          background: "transparent",
-          border: "none",
-          cursor: isFirst ? "not-allowed" : "pointer",
-          padding: "6px 8px",
-          minWidth: 44,
-          lineHeight: 1,
-        }}
-      >
-        ▴
-      </button>
-      <button
-        type="button"
-        onClick={onDown}
-        disabled={disabled || isLast}
-        aria-label="このタスクを下に移動"
-        className="sk-mono"
-        style={{
-          color: isLast ? "var(--color-ink-4)" : "var(--color-ink-3)",
-          background: "transparent",
-          border: "none",
-          cursor: isLast ? "not-allowed" : "pointer",
-          padding: "6px 8px",
-          minWidth: 44,
-          lineHeight: 1,
-        }}
-      >
-        ▾
-      </button>
     </div>
   );
 }
@@ -838,9 +1002,13 @@ function defaultBucketFromTimeOfDay(
 function TodoAddRow({
   todayDate,
   timeOfDay,
+  onOptimisticCreate,
+  onRevertOptimistic,
 }: {
   todayDate: string;
   timeOfDay: "morning" | "day" | "evening";
+  onOptimisticCreate: (todo: TodoRow) => void;
+  onRevertOptimistic: () => void;
 }) {
   const router = useRouter();
   const [text, setText] = useState("");
@@ -858,19 +1026,46 @@ function TodoAddRow({
   function submit() {
     if (!text.trim() || isPending) return;
     setError(null);
-    const payload = { text: text.trim(), targetDate: todayDate, bucket };
+    const trimmed = text.trim();
+    // 楽観 UI: client 側で UUID を生成して即座に行を追加 (PR #45 review)。
+    // server には同じ id で INSERT → refresh で自然に同期 (id 一致なので重複しない)。
+    const newId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+    const optimisticTodo: TodoRow = {
+      id: newId,
+      target_date: todayDate,
+      text: trimmed,
+      bucket,
+      time: null,
+      position: 999999, // server で振り直されるまでの一時的に末尾相当の値
+      done: false,
+      important: false,
+      carry_from_date: null,
+      carry_from_todo_id: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    onOptimisticCreate(optimisticTodo);
+    setText("");
+    // 連続追加 UX: 入力欄に focus 維持
+    requestAnimationFrame(() => inputRef.current?.focus());
+
     startTransition(async () => {
       try {
-        const r = await createTodo(payload);
+        const r = await createTodo({
+          id: newId,
+          text: trimmed,
+          targetDate: todayDate,
+          bucket,
+        });
         if (r.ok) {
-          setText("");
           router.refresh();
-          // refresh 後も入力欄に focus を残す (連続追加の UX)
-          requestAnimationFrame(() => inputRef.current?.focus());
         } else {
+          onRevertOptimistic();
           setError(r.error ?? "追加に失敗しました");
         }
       } catch (e) {
+        onRevertOptimistic();
         console.error("createTodo threw", redactClientError(e));
         setError("追加に失敗しました。時間をおいて再度お試しください。");
       }
@@ -917,7 +1112,9 @@ function TodoAddRow({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={isPending}
+        // PR #45 review: disabled は外す (gray-out 回避)。
+        // 楽観 UI ですでに行が追加されているので連続入力可。submit 内に
+        // `if (!text.trim() || isPending) return;` の guard あり。
         placeholder="タスクを追加..."
         aria-label="タスクの内容"
         autoComplete="off"
@@ -938,7 +1135,6 @@ function TodoAddRow({
         name="new-todo-bucket"
         value={bucket}
         onChange={(e) => setBucket(e.target.value as TodoBucket)}
-        disabled={isPending}
         aria-label="時間バケット"
         className="sk-chip"
         style={{ cursor: "pointer", background: "var(--color-bg)" }}
@@ -953,7 +1149,6 @@ function TodoAddRow({
         <button
           type="button"
           onClick={submit}
-          disabled={isPending}
           className="sk-btn sk-btn-ink"
           style={{ fontSize: 13, padding: "8px 12px", minHeight: 44 }}
         >

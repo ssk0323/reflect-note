@@ -130,6 +130,9 @@ async function countTodos(
 // --------------------------------------------------------------------------
 
 export async function createTodo(input: {
+  /** PR #45 review: 楽観 UI 用に client 側で生成した UUID を受け付ける。
+   *  渡されない場合は DB の uuid default で server 側生成。 */
+  id?: string;
   text: string;
   targetDate: string;
   bucket?: TodoBucket;
@@ -178,6 +181,14 @@ export async function createTodo(input: {
     };
   }
 
+  // 任意の client UUID を受け付ける (楽観 UI 用)。形式不正なら拒否。
+  const optionalId = input.id !== undefined && input.id !== null
+    ? isUuid(input.id) ? input.id : null
+    : undefined;
+  if (input.id !== undefined && input.id !== null && optionalId === null) {
+    return { ok: false, error: "id が不正です" };
+  }
+
   // position 計算: 同 (user, target_date, bucket) の max + 1。
   // UNIQUE 制約 (migration 0008) があるので並列衝突時は INSERT が失敗 → リトライで吸収。
   const { error } = await tryInsertWithPosition(
@@ -186,6 +197,7 @@ export async function createTodo(input: {
     input.targetDate,
     bucket,
     {
+      id: optionalId ?? undefined,
       text,
       time,
       important,
@@ -220,6 +232,8 @@ async function tryInsertWithPosition(
   targetDate: string,
   bucket: TodoBucket,
   fields: {
+    /** 任意の client 側 UUID。未指定なら DB の default で生成される (楽観 UI 用)。 */
+    id?: string;
     text: string;
     time: string | null;
     important: boolean;
@@ -242,7 +256,7 @@ async function tryInsertWithPosition(
     if (maxErr) return { error: maxErr };
     const nextPos = (maxRow?.position ?? -1) + 1;
 
-    const { error } = await supabase.from("todos").insert({
+    const insertPayload: Record<string, unknown> = {
       user_id: userId,
       target_date: targetDate,
       bucket,
@@ -252,7 +266,9 @@ async function tryInsertWithPosition(
       important: fields.important,
       carry_from_date: fields.carry_from_date,
       carry_from_todo_id: fields.carry_from_todo_id,
-    });
+    };
+    if (fields.id) insertPayload.id = fields.id;
+    const { error } = await supabase.from("todos").insert(insertPayload);
     if (!error) return { error: null };
 
     const code = (error as { code?: string }).code;
@@ -517,6 +533,51 @@ export async function reorderTodo(
   }
 
   console.error("reorderTodo rpc failed", safeErrorContext(rpcErr));
+  return { ok: false, error: GENERIC_ERROR };
+}
+
+// --------------------------------------------------------------------------
+// Move to arbitrary (bucket, position) (Issue #44)
+// --------------------------------------------------------------------------
+
+/** ハンドル drag (`@dnd-kit`) で任意の (bucket × position) に移動するための
+ *  server action。move_todo RPC (migration 0014) で position 再採番を atomic に行う。
+ *  bucket 間の移動と任意 position への挿入をどちらも扱う。 */
+export async function moveTodo(
+  id: string,
+  targetBucket: TodoBucket,
+  targetPosition: number,
+): Promise<TodoResult> {
+  if (!isUuid(id)) return { ok: false, error: "id が不正です" };
+  if (!isBucket(targetBucket)) {
+    return { ok: false, error: "bucket が不正です" };
+  }
+  if (!Number.isInteger(targetPosition) || targetPosition < 0) {
+    return { ok: false, error: "position が不正です" };
+  }
+
+  const auth = await requireAuth();
+  if (!auth.ok) return auth;
+
+  // 23505 (DEFERRABLE UNIQUE 衝突) は並列 RPC で発生し得るので数回 retry
+  // (reorderTodo / tryInsertWithPosition と同じパターン)。
+  const MAX_RETRIES = 4;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { error } = await auth.supabase.rpc("move_todo", {
+      todo_id: id,
+      new_bucket: targetBucket,
+      new_position: targetPosition,
+    });
+    if (!error) {
+      revalidatePath("/");
+      return { ok: true };
+    }
+    lastErr = error;
+    const code = (error as { code?: string }).code;
+    if (code !== "23505") break;
+  }
+  console.error("moveTodo rpc failed", safeErrorContext(lastErr));
   return { ok: false, error: GENERIC_ERROR };
 }
 

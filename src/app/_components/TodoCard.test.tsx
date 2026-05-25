@@ -1,13 +1,38 @@
+import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import type { DragEndEvent } from "@dnd-kit/core";
 import { TodoCard } from "./TodoCard";
 import type { TodoRow } from "@/lib/todos/types";
+
+// PR #45 review: drag-end の wiring を回帰防止テスト可能にするため、
+// @dnd-kit/core の DndContext を mock して onDragEnd コールバックを捕捉する。
+// SortableContext / useSortable 等は実物を使い (useSortable は useContext で
+// DndContext を要求しないので問題なく動く)、handleDragEnd の挙動だけ検証する。
+let capturedOnDragEnd: ((event: DragEndEvent) => void) | null = null;
+vi.mock("@dnd-kit/core", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    DndContext: ({
+      onDragEnd,
+      children,
+    }: {
+      onDragEnd?: (event: DragEndEvent) => void;
+      children: ReactNode;
+    }) => {
+      capturedOnDragEnd = onDragEnd ?? null;
+      return <>{children}</>;
+    },
+  };
+});
 
 const toggleTodoDone = vi.fn();
 const createTodo = vi.fn();
 const updateTodo = vi.fn();
-const reorderTodo = vi.fn();
+const moveTodo = vi.fn();
 const deleteTodo = vi.fn();
 const carryTodoToTomorrow = vi.fn();
 const acceptCarryProposal = vi.fn();
@@ -17,7 +42,7 @@ vi.mock("@/app/_todos/actions", () => ({
   toggleTodoDone: (...args: unknown[]) => toggleTodoDone(...args),
   createTodo: (...args: unknown[]) => createTodo(...args),
   updateTodo: (...args: unknown[]) => updateTodo(...args),
-  reorderTodo: (...args: unknown[]) => reorderTodo(...args),
+  moveTodo: (...args: unknown[]) => moveTodo(...args),
   deleteTodo: (...args: unknown[]) => deleteTodo(...args),
   carryTodoToTomorrow: (...args: unknown[]) => carryTodoToTomorrow(...args),
   acceptCarryProposal: (...args: unknown[]) => acceptCarryProposal(...args),
@@ -49,11 +74,12 @@ describe("TodoCard", () => {
     toggleTodoDone.mockReset();
     createTodo.mockReset();
     updateTodo.mockReset();
-    reorderTodo.mockReset();
+    moveTodo.mockReset();
     deleteTodo.mockReset();
     carryTodoToTomorrow.mockReset();
     acceptCarryProposal.mockReset();
     refresh.mockReset();
+    capturedOnDragEnd = null;
   });
 
   it("バケット見出しの下にタスクを並べる", () => {
@@ -132,9 +158,7 @@ describe("TodoCard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   });
 
-  it("↑↓ ボタンで reorderTodo を呼ぶ (端では disabled)", async () => {
-    reorderTodo.mockResolvedValue({ ok: true });
-    const user = userEvent.setup();
+  it("↑↓ ボタンは Issue #44 で削除済み (ハンドル drag に一本化)", () => {
     render(
       <TodoCard
         todos={[
@@ -145,18 +169,27 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
+    expect(screen.queryByLabelText("このタスクを上に移動")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("このタスクを下に移動")).not.toBeInTheDocument();
+  });
 
-    // A は先頭なので「上に移動」が disabled
-    const aUp = screen.getAllByLabelText("このタスクを上に移動")[0];
-    expect(aUp).toBeDisabled();
-
-    // A の「下に移動」を押す
-    const aDown = screen.getAllByLabelText("このタスクを下に移動")[0];
-    await user.click(aDown);
-    expect(reorderTodo).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
-      "down",
+  it("各行に ≡ ドラッグハンドルが表示される", () => {
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A" }),
+          todo({ id: "22222222-2222-2222-2222-222222222222", text: "B" }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
     );
+    expect(
+      screen.getByRole("button", { name: /「A」をドラッグして並び替え/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /「B」をドラッグして並び替え/ }),
+    ).toBeInTheDocument();
   });
 
   it("showCarryAction=true の時、未完了タスクに「→明日」ボタンが出る", async () => {
@@ -572,5 +605,108 @@ describe("TodoCard", () => {
     await user.selectOptions(select, "night");
     // rollback で元の bucket (forenoon) のセクションに表示される
     expect(await screen.findByRole("alert")).toHaveTextContent(/保存に失敗/);
+  });
+
+  // ----------------------------------------------------------------------------
+  // Drag end wiring (PR #45 review)
+  // ----------------------------------------------------------------------------
+
+  it("drag end で moveTodo(id, bucket, position) が期待引数で呼ばれる", async () => {
+    moveTodo.mockResolvedValue({ ok: true });
+    render(
+      <TodoCard
+        todos={[
+          todo({
+            id: "11111111-1111-1111-1111-111111111111",
+            text: "A",
+            bucket: "morning",
+            position: 0,
+          }),
+          todo({
+            id: "22222222-2222-2222-2222-222222222222",
+            text: "B",
+            bucket: "morning",
+            position: 1,
+          }),
+          todo({
+            id: "33333333-3333-3333-3333-333333333333",
+            text: "C",
+            bucket: "afternoon",
+            position: 0,
+          }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    expect(capturedOnDragEnd).not.toBeNull();
+    // A を C にドロップ → A は afternoon の position 1 (C の後ろ) に
+    act(() => {
+      capturedOnDragEnd!({
+        active: { id: "11111111-1111-1111-1111-111111111111" },
+        over: { id: "33333333-3333-3333-3333-333333333333" },
+      } as unknown as DragEndEvent);
+    });
+    await vi.waitFor(() => expect(moveTodo).toHaveBeenCalled());
+    expect(moveTodo).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      "afternoon",
+      1,
+    );
+  });
+
+  it("drag end が失敗したら optimistic を rollback して role=alert を出す", async () => {
+    moveTodo.mockResolvedValue({ ok: false, error: "並び替えに失敗" });
+    render(
+      <TodoCard
+        todos={[
+          todo({
+            id: "11111111-1111-1111-1111-111111111111",
+            text: "A",
+            bucket: "morning",
+            position: 0,
+          }),
+          todo({
+            id: "22222222-2222-2222-2222-222222222222",
+            text: "B",
+            bucket: "morning",
+            position: 1,
+          }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    act(() => {
+      capturedOnDragEnd!({
+        active: { id: "11111111-1111-1111-1111-111111111111" },
+        over: { id: "22222222-2222-2222-2222-222222222222" },
+      } as unknown as DragEndEvent);
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/並び替えに失敗/);
+  });
+
+  it("drag end で over=active なら moveTodo は呼ばれない (no-op)", () => {
+    render(
+      <TodoCard
+        todos={[
+          todo({
+            id: "11111111-1111-1111-1111-111111111111",
+            text: "A",
+            bucket: "morning",
+            position: 0,
+          }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    act(() => {
+      capturedOnDragEnd!({
+        active: { id: "11111111-1111-1111-1111-111111111111" },
+        over: { id: "11111111-1111-1111-1111-111111111111" },
+      } as unknown as DragEndEvent);
+    });
+    expect(moveTodo).not.toHaveBeenCalled();
   });
 });

@@ -11,11 +11,13 @@ export type GoalStripData = {
   month: RecordRow | null;
   /** 今日のラベル (例: "5/21(木)") */
   todayLabel: string;
-  /** 今週の期間ラベル (例: "5/19 → 5/25 · 残り 3日") */
+  /** 今週の期間ラベル (例: "5/19 → 5/25")。残り日数は別 prop なので含めない。 */
   weekRangeLabel: string;
+  /** 今週の残り日数ラベル (例: "残り 3日") */
   weekRemainingLabel: string;
-  /** 今月のラベル (例: "5月" / "残り 10日") */
+  /** 今月のラベル (例: "5月")。残り日数は別 prop。 */
   monthLabel: string;
+  /** 今月の残り日数ラベル (例: "残り 10日") */
   monthRemainingLabel: string;
 };
 

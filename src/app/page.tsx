@@ -156,6 +156,19 @@ function formatYesterdayMeta(created: Date, now: Date): string {
 export default async function Home() {
   const supabase = await createSupabaseServerClient();
   const now = new Date();
+  const jstHour = getJstHour(now);
+
+  // 「業務日 (business day)」概念: 00:00-03:59 (JST) は前日の続きとして扱う
+  // (pickTimeOfDay の "evening" 範囲と一致させ、日付境界の不整合を防ぐ;
+  //  Round 11 Copilot review)。これをやらないと 01:00 で「夜モード」かつ
+  // 「今日 ToDo を carry」のような矛盾が起きる。
+  const calendarTodayKey = toJstDateString(now);
+  const todayKey =
+    jstHour < 4 ? addDays(calendarTodayKey, -1) : calendarTodayKey;
+  // 表示用 (date meta) / streak 計算用に business day を表す Date を作る。
+  // 正午にしておけば JST→UTC 変換時の off-by-one を避けられる。
+  const businessNow =
+    jstHour < 4 ? new Date(`${todayKey}T12:00:00+09:00`) : now;
 
   // 過去 STREAK_LOOKBACK_DAYS 日分の records を 1 query で取得する。
   const lookbackShifted = new Date(
@@ -170,11 +183,11 @@ export default async function Home() {
     lookbackStartUtc,
   );
 
-  const morningStreak = computeStreak(recentRecords, "morning", now);
-  const nightStreak = computeStreak(recentRecords, "night", now);
+  const morningStreak = computeStreak(recentRecords, "morning", businessNow);
+  const nightStreak = computeStreak(recentRecords, "night", businessNow);
 
-  // 期間境界を JST 日付文字列で表現する。
-  const todayKey = toJstDateString(now);
+  // 期間境界を JST 日付文字列で表現する (todayKey が business day 基準なので
+  // week/month も自動的に business day で揃う)。
   const dayEndExclusive = addDays(todayKey, 1);
   const yesterdayKey = addDays(todayKey, -1);
   const weekStart = startOfJstWeek(todayKey);
@@ -244,8 +257,10 @@ export default async function Home() {
     (e): e is string => typeof e === "string" && e.length > 0,
   );
 
+  // 挨拶は実時刻ベース ("こんばんは" は 23:30 にも 01:30 にも自然)。
+  // 日付ラベルは business day ベース (00:00-03:59 に翌日表示にならないよう)。
   const greeting = pickGreeting(now);
-  const dateMeta = dateMetaFormatter.format(now);
+  const dateMeta = dateMetaFormatter.format(businessNow);
 
   // 儀式ボタンの状態
   const rituals: {

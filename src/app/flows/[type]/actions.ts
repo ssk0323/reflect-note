@@ -30,7 +30,28 @@ async function syncMorningTasksToTodos(
     .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
     .map((t) => t.trim().slice(0, 500));
 
+  // Round 11 Copilot review: records 側に (user, type, target_date) UNIQUE が
+  // 無いため同じ日に morning を複数回保存できる。連携を冪等にするため、
+  // 同じ (user, target_date, bucket=morning, text) の todo が既にあれば skip する。
+  // 厳密な link テーブルではなく text 同値で重複検知する heuristic だが、
+  // 「同じ task1 を 2 回書く」「タスク文を編集後に再連携」程度は捌ける。
+  const { data: existingRows, error: existingErr } = await supabase
+    .from("todos")
+    .select("text")
+    .eq("user_id", userId)
+    .eq("target_date", targetDate)
+    .eq("bucket", "morning");
+  if (existingErr) {
+    const code = (existingErr as { code?: string }).code;
+    console.error("syncMorningTasksToTodos pre-check failed", { code });
+    return;
+  }
+  const existingTexts = new Set((existingRows ?? []).map((r) => r.text as string));
+
   for (const text of candidates) {
+    if (existingTexts.has(text)) continue;
+    // 次の iteration でも同じ text の重複 INSERT を抑止する
+    existingTexts.add(text);
     // Round 10 review: error を捨てると nextPos=0 で UNIQUE 違反になり原因が
     // 分かりづらくなる。明示的に拾って break する。
     const { data: maxRow, error: maxErr } = await supabase

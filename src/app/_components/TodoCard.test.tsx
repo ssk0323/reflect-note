@@ -8,6 +8,7 @@ const toggleTodoDone = vi.fn();
 const createTodo = vi.fn();
 const updateTodo = vi.fn();
 const reorderTodo = vi.fn();
+const moveTodo = vi.fn();
 const deleteTodo = vi.fn();
 const carryTodoToTomorrow = vi.fn();
 const acceptCarryProposal = vi.fn();
@@ -18,6 +19,7 @@ vi.mock("@/app/_todos/actions", () => ({
   createTodo: (...args: unknown[]) => createTodo(...args),
   updateTodo: (...args: unknown[]) => updateTodo(...args),
   reorderTodo: (...args: unknown[]) => reorderTodo(...args),
+  moveTodo: (...args: unknown[]) => moveTodo(...args),
   deleteTodo: (...args: unknown[]) => deleteTodo(...args),
   carryTodoToTomorrow: (...args: unknown[]) => carryTodoToTomorrow(...args),
   acceptCarryProposal: (...args: unknown[]) => acceptCarryProposal(...args),
@@ -50,6 +52,7 @@ describe("TodoCard", () => {
     createTodo.mockReset();
     updateTodo.mockReset();
     reorderTodo.mockReset();
+    moveTodo.mockReset();
     deleteTodo.mockReset();
     carryTodoToTomorrow.mockReset();
     acceptCarryProposal.mockReset();
@@ -572,5 +575,132 @@ describe("TodoCard", () => {
     await user.selectOptions(select, "night");
     // rollback で元の bucket (forenoon) のセクションに表示される
     expect(await screen.findByRole("alert")).toHaveTextContent(/保存に失敗/);
+  });
+
+  // ----------------------------------------------------------------------------
+  // Reorder via tap-to-pick + tap-to-place (Issue #42, B-1a)
+  // ----------------------------------------------------------------------------
+
+  it("各行に「並び替えを開始」ボタンがあり、タップで slot が表示される", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A", bucket: "morning", position: 0 }),
+          todo({ id: "22222222-2222-2222-2222-222222222222", text: "B", bucket: "morning", position: 1 }),
+          todo({ id: "33333333-3333-3333-3333-333333333333", text: "C", bucket: "afternoon", position: 0 }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    // 並び替え開始ボタン (各行に 1 つ)
+    const startButtons = screen.getAllByRole("button", { name: /並び替えを開始/ });
+    expect(startButtons).toHaveLength(3);
+
+    // 開始前は slot は無い
+    expect(screen.queryAllByRole("button", { name: /ここに置く/ })).toHaveLength(0);
+
+    // A の並び替え開始 → slot が表示される
+    await user.click(
+      screen.getByRole("button", { name: /「A」の並び替えを開始/ }),
+    );
+    // slot は: A 隣接 (= no-op) を除いて、各 bucket の有効位置に出る。
+    // morning: B の前 (pos 1), B の後 (pos 2)
+    // afternoon: pos 0, C の後 (pos 1)
+    // 合計 4 個 (A 周りの 2 つは省略)
+    const slots = screen.getAllByRole("button", { name: /ここに置く/ });
+    expect(slots.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("slot をタップすると moveTodo が呼ばれる", async () => {
+    moveTodo.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A", bucket: "morning", position: 0 }),
+          todo({ id: "22222222-2222-2222-2222-222222222222", text: "B", bucket: "morning", position: 1 }),
+          todo({ id: "33333333-3333-3333-3333-333333333333", text: "C", bucket: "afternoon", position: 0 }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    // A を持ち上げる
+    await user.click(
+      screen.getByRole("button", { name: /「A」の並び替えを開始/ }),
+    );
+    // afternoon の C の後ろの slot (= 末尾) をタップ
+    const slot = screen.getByRole("button", { name: /午後の末尾にここに置く/ });
+    await user.click(slot);
+    // moveTodo(id=A, bucket="afternoon", position=1) (= C の後ろ)
+    expect(moveTodo).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      "afternoon",
+      1,
+    );
+  });
+
+  it("並び替え開始ボタンをもう一度タップするとキャンセル (slot 消える)", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A", bucket: "morning", position: 0 }),
+          todo({ id: "22222222-2222-2222-2222-222222222222", text: "B", bucket: "morning", position: 1 }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    const startA = screen.getByRole("button", { name: /「A」の並び替えを開始/ });
+    await user.click(startA);
+    expect(screen.getAllByRole("button", { name: /ここに置く/ }).length).toBeGreaterThan(0);
+    // もう一度タップでキャンセル
+    await user.click(screen.getByRole("button", { name: /「A」の並び替えをキャンセル/ }));
+    expect(screen.queryAllByRole("button", { name: /ここに置く/ })).toHaveLength(0);
+    expect(moveTodo).not.toHaveBeenCalled();
+  });
+
+  it("Esc で並び替えがキャンセルされる", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A", bucket: "morning", position: 0 }),
+          todo({ id: "22222222-2222-2222-2222-222222222222", text: "B", bucket: "morning", position: 1 }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: /「A」の並び替えを開始/ }),
+    );
+    expect(screen.getAllByRole("button", { name: /ここに置く/ }).length).toBeGreaterThan(0);
+    await user.keyboard("{Escape}");
+    expect(screen.queryAllByRole("button", { name: /ここに置く/ })).toHaveLength(0);
+  });
+
+  it("moveTodo 失敗時に alert を出す", async () => {
+    moveTodo.mockResolvedValue({ ok: false, error: "並び替えに失敗" });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({ id: "11111111-1111-1111-1111-111111111111", text: "A", bucket: "morning", position: 0 }),
+          todo({ id: "33333333-3333-3333-3333-333333333333", text: "C", bucket: "afternoon", position: 0 }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: /「A」の並び替えを開始/ }),
+    );
+    const slot = screen.getAllByRole("button", { name: /ここに置く/ })[0];
+    await user.click(slot);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/並び替えに失敗/);
   });
 });

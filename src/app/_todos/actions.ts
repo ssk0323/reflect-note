@@ -521,6 +521,51 @@ export async function reorderTodo(
 }
 
 // --------------------------------------------------------------------------
+// Move to arbitrary (bucket, position) (Issue #42)
+// --------------------------------------------------------------------------
+
+/** B-1a の「タップで掴む → 行間スロットを挿入」を支える server action。
+ *  move_todo RPC (migration 0014) で position の再採番を atomic に行う。
+ *  bucket 跨ぎの移動と任意 position への挿入をどちらも扱う。 */
+export async function moveTodo(
+  id: string,
+  targetBucket: TodoBucket,
+  targetPosition: number,
+): Promise<TodoResult> {
+  if (!isUuid(id)) return { ok: false, error: "id が不正です" };
+  if (!isBucket(targetBucket)) {
+    return { ok: false, error: "bucket が不正です" };
+  }
+  if (!Number.isInteger(targetPosition) || targetPosition < 0) {
+    return { ok: false, error: "position が不正です" };
+  }
+
+  const auth = await requireAuth();
+  if (!auth.ok) return auth;
+
+  // 23505 (DEFERRABLE UNIQUE 衝突) や 40P01 (deadlock) は並列 RPC で発生し得るので
+  // 数回 retry する (reorderTodo / tryInsertWithPosition と同じパターン)。
+  const MAX_RETRIES = 4;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { error } = await auth.supabase.rpc("move_todo", {
+      todo_id: id,
+      new_bucket: targetBucket,
+      new_position: targetPosition,
+    });
+    if (!error) {
+      revalidatePath("/");
+      return { ok: true };
+    }
+    lastErr = error;
+    const code = (error as { code?: string }).code;
+    if (code !== "23505") break;
+  }
+  console.error("moveTodo rpc failed", safeErrorContext(lastErr));
+  return { ok: false, error: GENERIC_ERROR };
+}
+
+// --------------------------------------------------------------------------
 // Delete
 // --------------------------------------------------------------------------
 

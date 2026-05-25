@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -21,6 +22,7 @@ import {
   carryTodoToTomorrow,
   createTodo,
   deleteTodo,
+  moveTodo,
   reorderTodo,
   toggleTodoDone,
   updateTodo,
@@ -50,6 +52,7 @@ export function TodoCard({
   carryProposal = [],
   timeOfDay = "day",
 }: Props) {
+  const router = useRouter();
   const byBucket = groupByBucket(todos);
 
   // 達成集計はサーバから来た todos で常に再計算 (P2 toggle 後の集計未更新を解消)。
@@ -61,6 +64,53 @@ export function TodoCard({
   // 1 行だけ menu を open にするための global close 機構 (a11y P0)。
   // 各 TodoListRow が menuToken を保持し、別 row が open になったら自分は閉じる。
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  // Issue #42: 並び替えタップモード。reorderingId が set されているとき、
+  // 各 bucket に「ここに置く」slot を描画。slot タップで moveTodo を呼ぶ。
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const [, startReorderTransition] = useTransition();
+
+  // 移動中の todo の src 情報 (bucket × position)。slot 表示制御に使う。
+  const reorderingSrc =
+    reorderingId !== null
+      ? todos.find((t) => t.id === reorderingId) ?? null
+      : null;
+
+  // Esc キーで並び替えキャンセル (a11y)
+  useEffect(() => {
+    if (reorderingId === null) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setReorderingId(null);
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [reorderingId]);
+
+  function handleStartReorder(id: string) {
+    setReorderError(null);
+    setReorderingId((current) => (current === id ? null : id));
+  }
+
+  function handleSlotClick(targetBucket: TodoBucket, targetPosition: number) {
+    if (reorderingId === null) return;
+    const movingId = reorderingId;
+    setReorderingId(null);
+    setReorderError(null);
+    startReorderTransition(async () => {
+      try {
+        const r = await moveTodo(movingId, targetBucket, targetPosition);
+        if (r.ok) {
+          router.refresh();
+        } else {
+          setReorderError(r.error ?? "並び替えに失敗しました");
+        }
+      } catch (e) {
+        console.error("moveTodo threw", redactClientError(e));
+        setReorderError("並び替えに失敗しました");
+      }
+    });
+  }
 
   return (
     <article
@@ -107,11 +157,24 @@ export function TodoCard({
         />
       )}
 
-      {/* バケットごとのリスト */}
+      {/* 並び替えエラー (Issue #42) */}
+      {reorderError && (
+        <p
+          role="alert"
+          className="sk-mono mb-2"
+          style={{ color: "var(--color-warn)" }}
+        >
+          {reorderError}
+        </p>
+      )}
+
+      {/* バケットごとのリスト。reordering 中は空 bucket も表示 (移動先候補のため)。 */}
       {TODO_BUCKETS.map((bucket) => {
         const items = byBucket[bucket];
-        if (items.length === 0) return null;
+        // reordering 中は空 bucket も移動先候補として表示する
+        if (items.length === 0 && reorderingSrc === null) return null;
         const bDone = items.filter((t) => t.done).length;
+        const slotsForBucket = computeSlots(bucket, items, reorderingSrc);
         return (
           <section
             key={bucket}
@@ -133,21 +196,58 @@ export function TodoCard({
               >
                 {TODO_BUCKET_LABEL[bucket]}
               </span>
-              <span className="sk-mono" style={{ color: "var(--color-ink-4)" }}>
-                · {bDone} / {items.length}
-              </span>
+              {items.length > 0 && (
+                <span className="sk-mono" style={{ color: "var(--color-ink-4)" }}>
+                  · {bDone} / {items.length}
+                </span>
+              )}
             </div>
             <div>
-              {items.map((t, idx) => (
-                <TodoListRow
-                  key={t.id}
-                  todo={t}
-                  isFirst={idx === 0}
-                  isLast={idx === items.length - 1}
-                  showCarryAction={showCarryAction}
-                  openMenuId={openMenuId}
-                  setOpenMenuId={setOpenMenuId}
+              {/* slot at start of bucket (= 先頭) */}
+              {slotsForBucket.find((s) => s.displayIdx === 0) && (
+                <ReorderSlot
+                  bucket={bucket}
+                  bucketLabel={TODO_BUCKET_LABEL[bucket]}
+                  displayIdx={0}
+                  totalItems={items.length}
+                  prevText={null}
+                  nextText={items[0]?.text ?? null}
+                  newPosition={
+                    slotsForBucket.find((s) => s.displayIdx === 0)!.newPosition
+                  }
+                  onSelect={handleSlotClick}
                 />
+              )}
+              {items.map((t, idx) => (
+                <Fragment key={t.id}>
+                  <TodoListRow
+                    todo={t}
+                    isFirst={idx === 0}
+                    isLast={idx === items.length - 1}
+                    showCarryAction={showCarryAction}
+                    openMenuId={openMenuId}
+                    setOpenMenuId={setOpenMenuId}
+                    isReordering={reorderingId === t.id}
+                    reorderingActive={reorderingId !== null}
+                    onToggleReorder={() => handleStartReorder(t.id)}
+                  />
+                  {/* slot after this row */}
+                  {slotsForBucket.find((s) => s.displayIdx === idx + 1) && (
+                    <ReorderSlot
+                      bucket={bucket}
+                      bucketLabel={TODO_BUCKET_LABEL[bucket]}
+                      displayIdx={idx + 1}
+                      totalItems={items.length}
+                      prevText={t.text}
+                      nextText={items[idx + 1]?.text ?? null}
+                      newPosition={
+                        slotsForBucket.find((s) => s.displayIdx === idx + 1)!
+                          .newPosition
+                      }
+                      onSelect={handleSlotClick}
+                    />
+                  )}
+                </Fragment>
               ))}
             </div>
           </section>
@@ -170,6 +270,88 @@ export function TodoCard({
         </span>
       </div>
     </article>
+  );
+}
+
+/** 並び替え中に各 bucket の有効な挿入 slot を計算する (Issue #42)。
+ *  - src がこの bucket にある場合: src に隣接する 2 slot は no-op なので除外
+ *  - src が別 bucket の場合: 全 slot 有効
+ *  返り値: { displayIdx: 表示上の挿入位置 0..N, newPosition: moveTodo に渡す位置 }
+ */
+function computeSlots(
+  bucket: TodoBucket,
+  items: TodoRow[],
+  src: TodoRow | null,
+): { displayIdx: number; newPosition: number }[] {
+  if (src === null) return [];
+  const slots: { displayIdx: number; newPosition: number }[] = [];
+  if (src.bucket === bucket) {
+    // Same bucket: src の左右 (= src.position と src.position+1) を skip。
+    // 「lifted view の position」を newPosition として返す。
+    for (let i = 0; i <= items.length; i++) {
+      if (i === src.position || i === src.position + 1) continue;
+      slots.push({
+        displayIdx: i,
+        newPosition: i < src.position ? i : i - 1,
+      });
+    }
+  } else {
+    // Different bucket: 全 slot 有効、newPosition = displayIdx
+    for (let i = 0; i <= items.length; i++) {
+      slots.push({ displayIdx: i, newPosition: i });
+    }
+  }
+  return slots;
+}
+
+function ReorderSlot({
+  bucket,
+  bucketLabel,
+  displayIdx,
+  totalItems,
+  prevText,
+  nextText,
+  newPosition,
+  onSelect,
+}: {
+  bucket: TodoBucket;
+  bucketLabel: string;
+  displayIdx: number;
+  totalItems: number;
+  prevText: string | null;
+  nextText: string | null;
+  newPosition: number;
+  onSelect: (bucket: TodoBucket, position: number) => void;
+}) {
+  // aria-label: 「ここに置く」を必ず含み、bucket と位置の文脈も付与する。
+  const label = (() => {
+    if (totalItems === 0) return `${bucketLabel}にここに置く`;
+    if (displayIdx === 0) return `${bucketLabel}の先頭にここに置く`;
+    if (displayIdx === totalItems) return `${bucketLabel}の末尾にここに置く`;
+    return `${bucketLabel}: 「${prevText}」と「${nextText}」の間にここに置く`;
+  })();
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(bucket, newPosition)}
+      aria-label={label}
+      // sk-tap-target: coarse pointer で 44px hit area
+      className="sk-tap-target w-full flex items-center justify-center"
+      style={{
+        height: 32,
+        margin: "2px 0",
+        border: "1px dashed var(--color-line)",
+        borderRadius: 6,
+        background: "transparent",
+        color: "var(--color-ink-3)",
+        fontFamily: "var(--font-mono), monospace",
+        fontSize: 11,
+        letterSpacing: "0.06em",
+        cursor: "pointer",
+      }}
+    >
+      ↓ ここに置く ↓
+    </button>
   );
 }
 
@@ -200,6 +382,9 @@ function TodoListRow({
   showCarryAction,
   openMenuId,
   setOpenMenuId,
+  isReordering,
+  reorderingActive,
+  onToggleReorder,
 }: {
   todo: TodoRow;
   isFirst: boolean;
@@ -207,6 +392,9 @@ function TodoListRow({
   showCarryAction: boolean;
   openMenuId: string | null;
   setOpenMenuId: (id: string | null) => void;
+  isReordering: boolean;
+  reorderingActive: boolean;
+  onToggleReorder: () => void;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -619,16 +807,48 @@ function TodoListRow({
           onDown={() => handleReorder("down")}
           isFirst={isFirst}
           isLast={isLast}
-          disabled={isPending}
+          disabled={isPending || reorderingActive}
           taskName={todo.text}
         />
+        {/* Issue #42: 任意位置移動の trigger。
+            isReordering 中は「キャンセル」、それ以外は「開始」として動く。 */}
+        <button
+          type="button"
+          onClick={onToggleReorder}
+          disabled={isPending || (reorderingActive && !isReordering)}
+          aria-label={
+            isReordering
+              ? `「${todo.text}」の並び替えをキャンセル`
+              : `「${todo.text}」の並び替えを開始`
+          }
+          aria-pressed={isReordering}
+          // sk-tap-target で coarse pointer 時 44px hit area
+          className="sk-tap-target"
+          style={{
+            minWidth: 32,
+            padding: "8px 6px",
+            background: isReordering
+              ? "var(--color-accent)"
+              : "transparent",
+            color: isReordering
+              ? "var(--color-bg)"
+              : "var(--color-ink-3)",
+            border: "none",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 16,
+            fontFamily: "var(--font-mono), monospace",
+          }}
+        >
+          ≡
+        </button>
         <TodoRowMenu
           todo={todo}
           isOpen={openMenuId === todo.id}
           onToggleOpen={() => setOpenMenuId(openMenuId === todo.id ? null : todo.id)}
           onClose={() => setOpenMenuId(null)}
           onDelete={handleDelete}
-          isPending={isPending}
+          isPending={isPending || reorderingActive}
         />
       </div>
 

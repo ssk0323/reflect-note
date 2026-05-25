@@ -144,6 +144,18 @@ export function TodoCard({
     setOptimisticTodos(null);
   }, []);
 
+  // 新規追加の楽観 UI: TodoAddRow から渡された全フィールド入り todo を即座に
+  // optimisticTodos に追加。server INSERT も同じ id で投げる → refresh で同期。
+  const applyOptimisticCreate = useCallback(
+    (newTodo: TodoRow) => {
+      setOptimisticTodos((current) => {
+        const base = current ?? todos;
+        return [...base, newTodo];
+      });
+    },
+    [todos],
+  );
+
   // 削除 / 時間帯変更は行が remount するため TodoListRow ローカルの error state は
   // 失われる。エラー表示は親 (TodoCard) に lift して banner で出す。
   const setRowError = useCallback((msg: string | null) => {
@@ -304,7 +316,12 @@ export function TodoCard({
         </SortableContext>
       </DndContext>
 
-      <TodoAddRow todayDate={todayDate} timeOfDay={timeOfDay} />
+      <TodoAddRow
+        todayDate={todayDate}
+        timeOfDay={timeOfDay}
+        onOptimisticCreate={applyOptimisticCreate}
+        onRevertOptimistic={revertOptimistic}
+      />
 
       {/* Footer */}
       <div
@@ -606,7 +623,9 @@ function TodoListRow({
             type="checkbox"
             checked={checked}
             onChange={handleToggle}
-            disabled={isPending}
+            // PR #45 review: disabled={isPending} を外す。browser の disabled
+            // ネイティブ styling (半透明グレー) が「処理中=未確定」に見えるため。
+            // 二重 submit は handleToggle 内の `if (isPending) return;` で防ぐ。
             aria-label={`完了: ${currentText}`}
             className="h-4 w-4 cursor-pointer rounded-sm"
             style={{
@@ -636,7 +655,9 @@ function TodoListRow({
             onChange={(e) => setDraftText(e.target.value)}
             onKeyDown={handleTextKeyDown}
             onBlur={commitTextEdit}
-            disabled={isPending}
+            // PR #45 review: disabled は外す (gray-out 回避)。
+            // commit は setIsEditingText(false) で input 自体が消えるので
+            // 二重 commit のリスクはほぼ無い。
             maxLength={500}
             aria-label="タスク本文を編集"
             // 編集中の input も coarse pointer で 44px hit area を確保
@@ -658,7 +679,8 @@ function TodoListRow({
           <button
             type="button"
             onClick={startEditingText}
-            disabled={isPending}
+            // PR #45 review: disabled は外す (gray-out 回避)。
+            // 二重 submit は startEditingText 内の `if (isPending) return;` で防ぐ。
             // aria-label に重要フラグも含める (button に aria-label を付けると
             // 子要素の sr-only がアクセシブル名計算から除外されるため;
             // PR #41 round 3 Copilot review)。
@@ -974,9 +996,13 @@ function defaultBucketFromTimeOfDay(
 function TodoAddRow({
   todayDate,
   timeOfDay,
+  onOptimisticCreate,
+  onRevertOptimistic,
 }: {
   todayDate: string;
   timeOfDay: "morning" | "day" | "evening";
+  onOptimisticCreate: (todo: TodoRow) => void;
+  onRevertOptimistic: () => void;
 }) {
   const router = useRouter();
   const [text, setText] = useState("");
@@ -994,19 +1020,46 @@ function TodoAddRow({
   function submit() {
     if (!text.trim() || isPending) return;
     setError(null);
-    const payload = { text: text.trim(), targetDate: todayDate, bucket };
+    const trimmed = text.trim();
+    // 楽観 UI: client 側で UUID を生成して即座に行を追加 (PR #45 review)。
+    // server には同じ id で INSERT → refresh で自然に同期 (id 一致なので重複しない)。
+    const newId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+    const optimisticTodo: TodoRow = {
+      id: newId,
+      target_date: todayDate,
+      text: trimmed,
+      bucket,
+      time: null,
+      position: 999999, // server で振り直されるまでの一時的に末尾相当の値
+      done: false,
+      important: false,
+      carry_from_date: null,
+      carry_from_todo_id: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    onOptimisticCreate(optimisticTodo);
+    setText("");
+    // 連続追加 UX: 入力欄に focus 維持
+    requestAnimationFrame(() => inputRef.current?.focus());
+
     startTransition(async () => {
       try {
-        const r = await createTodo(payload);
+        const r = await createTodo({
+          id: newId,
+          text: trimmed,
+          targetDate: todayDate,
+          bucket,
+        });
         if (r.ok) {
-          setText("");
           router.refresh();
-          // refresh 後も入力欄に focus を残す (連続追加の UX)
-          requestAnimationFrame(() => inputRef.current?.focus());
         } else {
+          onRevertOptimistic();
           setError(r.error ?? "追加に失敗しました");
         }
       } catch (e) {
+        onRevertOptimistic();
         console.error("createTodo threw", redactClientError(e));
         setError("追加に失敗しました。時間をおいて再度お試しください。");
       }
@@ -1053,7 +1106,9 @@ function TodoAddRow({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={isPending}
+        // PR #45 review: disabled は外す (gray-out 回避)。
+        // 楽観 UI ですでに行が追加されているので連続入力可。submit 内に
+        // `if (!text.trim() || isPending) return;` の guard あり。
         placeholder="タスクを追加..."
         aria-label="タスクの内容"
         autoComplete="off"
@@ -1074,7 +1129,6 @@ function TodoAddRow({
         name="new-todo-bucket"
         value={bucket}
         onChange={(e) => setBucket(e.target.value as TodoBucket)}
-        disabled={isPending}
         aria-label="時間バケット"
         className="sk-chip"
         style={{ cursor: "pointer", background: "var(--color-bg)" }}
@@ -1089,7 +1143,6 @@ function TodoAddRow({
         <button
           type="button"
           onClick={submit}
-          disabled={isPending}
           className="sk-btn sk-btn-ink"
           style={{ fontSize: 13, padding: "8px 12px", minHeight: 44 }}
         >

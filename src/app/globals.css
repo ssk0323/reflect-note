@@ -190,15 +190,22 @@ a:focus-visible {
 }
 
 /* ---- a11y: タッチターゲット最小サイズ ----
- * `pointer:coarse` のデバイス (タッチ画面) では WCAG 2.5.5 / Apple HIG の
- * 44×44 px を確保。デスクトップ (`pointer:fine`) は現状の手書き調を維持。 */
+ * `pointer:coarse` のデバイス (タッチ画面) では WCAG 2.5.5 / Apple HIG が推奨する
+ * 44×44 px に近いタップ領域を確保する。`.sk-btn` / `.sk-chip` / `.sk-tap-target` に
+ * 共通で `min-height: 44px` を付与し、幅は `.sk-chip` で `padding: 8px 12px` により
+ * 自然に確保する (アイコンのみ等で幅が 44px 未満になり得る要素は、呼び出し側で
+ * `min-width: 44px` を併用すること)。デスクトップ (`pointer:fine`) は現状の手書き調
+ * を維持。 */
 @media (pointer: coarse) {
   .sk-btn,
   .sk-chip,
+  .sk-tap-target,
   [role="gridcell"] {
     min-height: 44px;
   }
   .sk-chip {
     padding: 8px 12px;
   }
+  /* テキスト編集トリガー等、視覚的には padding 0 のままにしたい要素は
+     min-height のみ確保し、min-width / padding は呼び出し側で個別に調整する。 */
 }

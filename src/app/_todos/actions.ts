@@ -310,6 +310,81 @@ export async function updateTodo(
 
   if (Object.keys(update).length === 0) return { ok: true };
 
+  // Issue #40: bucket を変える場合は新 bucket の末尾 position に再採番する必要がある。
+  // UNIQUE(user_id, target_date, bucket, position) で既存 position と衝突しうるため、
+  // 同じ position のまま bucket だけ変えると 23505 になる。
+  //
+  // PR #41 review (Copilot + Codex): 並行 update で `max(position)+1` が
+  // 衝突しうるため、UPDATE 単発ではなく「max 取得 → UPDATE → 23505 なら retry」の
+  // ループ (tryInsertWithPosition と同じパターン) に。
+  if (patch.bucket !== undefined) {
+    // 対象 todo の (target_date, 現 bucket) を取得 (RLS で他人の todo は弾かれる)
+    const { data: src, error: srcErr } = await auth.supabase
+      .from("todos")
+      .select("target_date, bucket")
+      .eq("id", id)
+      .eq("user_id", auth.user.id)
+      .maybeSingle();
+    if (srcErr) {
+      console.error("updateTodo bucket fetch failed", safeErrorContext(srcErr));
+      return { ok: false, error: GENERIC_ERROR };
+    }
+    if (!src) return { ok: false, error: "対象の ToDo が見つかりません" };
+
+    // bucket が同じなら position 再採番は不要 (= 通常 update 経路)
+    if (src.bucket === patch.bucket) {
+      // 何もしない — 下の単発 UPDATE に流れる
+    } else {
+      const MAX_RETRIES = 8;
+      let lastErr: unknown = null;
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const { data: maxRow, error: maxErr } = await auth.supabase
+          .from("todos")
+          .select("position")
+          .eq("user_id", auth.user.id)
+          .eq("target_date", src.target_date)
+          .eq("bucket", patch.bucket)
+          .order("position", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (maxErr) {
+          console.error("updateTodo bucket max-pos failed", safeErrorContext(maxErr));
+          return { ok: false, error: GENERIC_ERROR };
+        }
+        update.position = (maxRow?.position ?? -1) + 1;
+
+        const { data, error } = await auth.supabase
+          .from("todos")
+          .update(update)
+          .eq("id", id)
+          .eq("user_id", auth.user.id)
+          .select("id");
+        if (!error) {
+          if (!data || data.length === 0) {
+            return { ok: false, error: "対象の ToDo が見つかりません" };
+          }
+          revalidatePath("/");
+          return { ok: true };
+        }
+        lastErr = error;
+        const code = (error as { code?: string }).code;
+        if (code === "23505") {
+          // 並行 update で max が古くなった → 取り直して retry
+          continue;
+        }
+        // それ以外のエラーは即返却
+        console.error("updateTodo failed", safeErrorContext(error));
+        return { ok: false, error: GENERIC_ERROR };
+      }
+      console.error(
+        "updateTodo bucket retry exhausted",
+        safeErrorContext(lastErr),
+      );
+      return { ok: false, error: GENERIC_ERROR };
+    }
+  }
+
+  // bucket 変更ナシ or bucket が同一の通常 UPDATE 経路
   const { data, error } = await auth.supabase
     .from("todos")
     .update(update)

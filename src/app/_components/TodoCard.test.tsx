@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TodoCard } from "./TodoCard";
 import type { TodoRow } from "@/lib/todos/types";
 
 const toggleTodoDone = vi.fn();
 const createTodo = vi.fn();
+const updateTodo = vi.fn();
 const reorderTodo = vi.fn();
 const deleteTodo = vi.fn();
 const carryTodoToTomorrow = vi.fn();
@@ -15,6 +16,7 @@ const refresh = vi.fn();
 vi.mock("@/app/_todos/actions", () => ({
   toggleTodoDone: (...args: unknown[]) => toggleTodoDone(...args),
   createTodo: (...args: unknown[]) => createTodo(...args),
+  updateTodo: (...args: unknown[]) => updateTodo(...args),
   reorderTodo: (...args: unknown[]) => reorderTodo(...args),
   deleteTodo: (...args: unknown[]) => deleteTodo(...args),
   carryTodoToTomorrow: (...args: unknown[]) => carryTodoToTomorrow(...args),
@@ -46,6 +48,7 @@ describe("TodoCard", () => {
   beforeEach(() => {
     toggleTodoDone.mockReset();
     createTodo.mockReset();
+    updateTodo.mockReset();
     reorderTodo.mockReset();
     deleteTodo.mockReset();
     carryTodoToTomorrow.mockReset();
@@ -105,7 +108,7 @@ describe("TodoCard", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: "X" });
+    const checkbox = screen.getByRole("checkbox", { name: /X/ });
     await user.click(checkbox);
 
     await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
@@ -122,7 +125,7 @@ describe("TodoCard", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: "X" });
+    const checkbox = screen.getByRole("checkbox", { name: /X/ });
     await user.click(checkbox);
 
     await vi.waitFor(() => expect(checkbox).not.toBeChecked());
@@ -244,7 +247,7 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
-    const checkbox = screen.getByRole("checkbox", { name: "X" });
+    const checkbox = screen.getByRole("checkbox", { name: /X/ });
     expect(checkbox).not.toBeChecked();
 
     rerender(
@@ -254,8 +257,10 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
-    // 再 render 後、useEffect で local state が同期される
-    expect(screen.getByRole("checkbox", { name: "X" })).toBeChecked();
+    // 再 render 中に「prev props と比較して setState」する React 公式パターン
+    // (Storing information from previous renders) で local state が同期される。
+    // useEffect ではないので set-state-in-effect lint には引っかからない。
+    expect(screen.getByRole("checkbox", { name: /X/ })).toBeChecked();
   });
 
   it("引き継ぎ提案カードで「N件追加」を押すと acceptCarryProposal が呼ばれる", async () => {
@@ -354,5 +359,218 @@ describe("TodoCard", () => {
       />,
     );
     expect(screen.getByText(/2 \/ 4 達成 · 大事な3つ 1\/3/)).toBeInTheDocument();
+  });
+
+  // ----------------------------------------------------------------------------
+  // Inline edit: text (Issue #40)
+  // ----------------------------------------------------------------------------
+
+  it("テキストをタップすると編集モードに入り、prefill された input が表示される", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "元のテキスト" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: /元のテキスト を編集/ });
+    await user.click(trigger);
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ });
+    expect(input).toHaveValue("元のテキスト");
+  });
+
+  it("編集 → Enter で updateTodo が呼ばれ、新しいテキストが UI に反映される", async () => {
+    updateTodo.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "古い" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /古い を編集/ }));
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ });
+    await user.clear(input);
+    await user.type(input, "新しい{Enter}");
+    expect(updateTodo).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      { text: "新しい" },
+    );
+    // 編集モードから抜けて、新テキストの button が出る
+    expect(
+      await screen.findByRole("button", { name: /新しい を編集/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("編集 → blur (フォーカス外し) でも保存される", async () => {
+    updateTodo.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "古い" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /古い を編集/ }));
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ });
+    await user.clear(input);
+    await user.type(input, "ブラー保存");
+    // tab で blur
+    await user.tab();
+    expect(updateTodo).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      { text: "ブラー保存" },
+    );
+  });
+
+  it("Esc で編集破棄 → updateTodo は呼ばれず元テキストが残る", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "元" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /元 を編集/ }));
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ });
+    await user.type(input, "捨てる");
+    await user.keyboard("{Escape}");
+    expect(updateTodo).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /元 を編集/ })).toBeInTheDocument();
+  });
+
+  it("空文字で Enter しても updateTodo は呼ばれず元テキストが残る", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "残す" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /残す を編集/ }));
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ });
+    await user.clear(input);
+    await user.keyboard("{Enter}");
+    expect(updateTodo).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /残す を編集/ })).toBeInTheDocument();
+  });
+
+  it("テキストが変わっていない (= 同じ text で保存) なら updateTodo は呼ばれない", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "変わらず" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /変わらず を編集/ }));
+    await user.keyboard("{Enter}");
+    expect(updateTodo).not.toHaveBeenCalled();
+  });
+
+  it("IME 確定の Enter (keyCode=229) では submit しない", async () => {
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "古" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /古 を編集/ }));
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ }) as HTMLInputElement;
+    // fireEvent.keyDown で keyCode=229 を直接渡し、IME 確定の Enter を再現する
+    // (jsdom では isComposing が read-only なので keyCode 経由のガードを検証)
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(updateTodo).not.toHaveBeenCalled();
+    // input がまだ表示されている (= submit されていない)
+    expect(screen.getByRole("textbox", { name: /タスク本文を編集/ })).toBeInTheDocument();
+  });
+
+  it("updateTodo が失敗したら元テキストにロールバックし alert が出る", async () => {
+    updateTodo.mockResolvedValue({ ok: false, error: "保存に失敗しました" });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[todo({ id: "11111111-1111-1111-1111-111111111111", text: "元" })]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /元 を編集/ }));
+    const input = screen.getByRole("textbox", { name: /タスク本文を編集/ });
+    await user.clear(input);
+    await user.type(input, "失敗{Enter}");
+    // updateTodo は呼ばれる
+    expect(updateTodo).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      { text: "失敗" },
+    );
+    // rollback で元の text に戻る
+    expect(
+      await screen.findByRole("button", { name: /元 を編集/ }),
+    ).toBeInTheDocument();
+    // alert が出る
+    expect(await screen.findByRole("alert")).toHaveTextContent(/保存に失敗/);
+  });
+
+  // ----------------------------------------------------------------------------
+  // Inline edit: bucket (Issue #40)
+  // ----------------------------------------------------------------------------
+
+  it("bucket chip をタップすると select が表示され、変更で updateTodo が呼ばれる", async () => {
+    updateTodo.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({
+            id: "11111111-1111-1111-1111-111111111111",
+            text: "Bテスト",
+            bucket: "forenoon",
+          }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: /時間帯を変更/ });
+    await user.click(chip);
+    const select = screen.getByRole("combobox", { name: /時間帯を選択/ });
+    await user.selectOptions(select, "afternoon");
+    expect(updateTodo).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      { bucket: "afternoon" },
+    );
+  });
+
+  it("bucket 変更が失敗したら元の bucket に戻し alert を出す", async () => {
+    updateTodo.mockResolvedValue({ ok: false, error: "保存に失敗" });
+    const user = userEvent.setup();
+    render(
+      <TodoCard
+        todos={[
+          todo({
+            id: "11111111-1111-1111-1111-111111111111",
+            text: "Bエラー",
+            bucket: "forenoon",
+          }),
+        ]}
+        todayDate="2026-05-22"
+        showCarryAction={false}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: /時間帯を変更/ });
+    await user.click(chip);
+    const select = screen.getByRole("combobox", { name: /時間帯を選択/ });
+    await user.selectOptions(select, "night");
+    // rollback で元の bucket (forenoon) のセクションに表示される
+    expect(await screen.findByRole("alert")).toHaveTextContent(/保存に失敗/);
   });
 });

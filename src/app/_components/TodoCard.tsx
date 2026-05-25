@@ -23,6 +23,7 @@ import {
   deleteTodo,
   reorderTodo,
   toggleTodoDone,
+  updateTodo,
 } from "@/app/_todos/actions";
 
 /** client 側で console.error する際に、ユーザー入力 text を含み得る Server Action
@@ -219,10 +220,105 @@ function TodoListRow({
     setPrevDone(todo.done);
     setChecked(todo.done);
   }
+  // Issue #40: テキスト/バケットのインライン編集。
+  // text は楽観 UI (currentText を即時更新、失敗時 rollback) で、行が動かない。
+  // bucket は非楽観 (refresh で行が新セクションに移動するので一旦待つ)。
+  const [currentText, setCurrentText] = useState(todo.text);
+  const [prevText, setPrevText] = useState(todo.text);
+  if (todo.text !== prevText) {
+    setPrevText(todo.text);
+    setCurrentText(todo.text);
+  }
+  const [isEditingText, setIsEditingText] = useState(false);
+  const [draftText, setDraftText] = useState(todo.text);
+  const [isEditingBucket, setIsEditingBucket] = useState(false);
+  const editInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const inputId = useId();
 
   const refresh = useCallback(() => router.refresh(), [router]);
+
+  // 編集モードに入ったら input にフォーカスを当てて選択
+  useEffect(() => {
+    if (isEditingText) {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    }
+  }, [isEditingText]);
+
+  function startEditingText() {
+    if (isPending) return;
+    setDraftText(currentText);
+    setError(null);
+    setIsEditingText(true);
+  }
+
+  function commitTextEdit() {
+    const trimmed = draftText.trim().slice(0, 500);
+    if (!trimmed || trimmed === currentText) {
+      // 空 or 変更なし → 編集破棄
+      setIsEditingText(false);
+      setDraftText(currentText);
+      return;
+    }
+    const previous = currentText;
+    setCurrentText(trimmed);
+    setIsEditingText(false);
+    setError(null);
+    startTransition(async () => {
+      try {
+        const r = await updateTodo(todo.id, { text: trimmed });
+        if (r.ok) {
+          refresh();
+        } else {
+          setCurrentText(previous);
+          setError(r.error ?? "保存に失敗しました");
+        }
+      } catch (e) {
+        setCurrentText(previous);
+        console.error("updateTodo text threw", redactClientError(e));
+        setError("保存に失敗しました");
+      }
+    });
+  }
+
+  function cancelTextEdit() {
+    setIsEditingText(false);
+    setDraftText(currentText);
+  }
+
+  function handleTextKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // IME 確定の Enter で誤 submit しない (TodoAddRow と同じパターン)
+    if (
+      e.nativeEvent.isComposing ||
+      (e as unknown as { keyCode: number }).keyCode === 229
+    ) {
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitTextEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelTextEdit();
+    }
+  }
+
+  function commitBucketEdit(newBucket: TodoBucket) {
+    setIsEditingBucket(false);
+    if (newBucket === todo.bucket) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const r = await updateTodo(todo.id, { bucket: newBucket });
+        if (r.ok) refresh();
+        else setError(r.error ?? "保存に失敗しました");
+      } catch (e) {
+        console.error("updateTodo bucket threw", redactClientError(e));
+        setError("保存に失敗しました");
+      }
+    });
+  }
 
   function handleToggle() {
     if (isPending) return;
@@ -306,10 +402,12 @@ function TodoListRow({
         opacity: isPending ? 0.6 : 1,
       }}
     >
-      {/* 左: checkbox (label でラップして a11y を整える) */}
-      <label
-        htmlFor={inputId}
-        className="flex items-center gap-2 cursor-pointer min-w-0"
+      {/* 左: checkbox + 重要マーク + テキスト (タップで編集モードへ; Issue #40)。
+          label でテキストまで包まないのは、テキストをタップしたときに
+          checkbox トグルでなく編集モードに入るようにするため。
+          checkbox は aria-label で本文を読み上げてもらう。 */}
+      <div
+        className="flex items-center gap-2 min-w-0"
         style={{ gridColumn: "1 / span 2" }}
       >
         <input
@@ -318,6 +416,7 @@ function TodoListRow({
           checked={checked}
           onChange={handleToggle}
           disabled={isPending}
+          aria-label={`完了: ${currentText}`}
           className="h-4 w-4 cursor-pointer rounded-sm flex-shrink-0"
           style={{
             borderColor: "var(--color-ink-2)",
@@ -337,24 +436,60 @@ function TodoListRow({
             ★
           </span>
         )}
-        <span
-          className="min-w-0 truncate"
-          style={{
-            fontFamily: "var(--font-sans), sans-serif",
-            fontSize: todo.important ? 17 : 15,
-            fontWeight: todo.important ? 700 : 400,
-            color: checked ? "var(--color-ink-3)" : "var(--color-ink)",
-            textDecoration: checked ? "line-through" : "none",
-            textDecorationThickness: "1px",
-            lineHeight: 1.4,
-          }}
-        >
-          {todo.important && (
-            <span className="sr-only">重要なタスク: </span>
-          )}
-          {todo.text}
-        </span>
-      </label>
+        {isEditingText ? (
+          <input
+            ref={editInputRef}
+            type="text"
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+            onKeyDown={handleTextKeyDown}
+            onBlur={commitTextEdit}
+            disabled={isPending}
+            maxLength={500}
+            aria-label="タスク本文を編集"
+            className="flex-1 min-w-0"
+            style={{
+              fontFamily: "var(--font-sans), sans-serif",
+              fontSize: todo.important ? 17 : 15,
+              fontWeight: todo.important ? 700 : 400,
+              color: "var(--color-ink)",
+              background: "transparent",
+              border: "none",
+              borderBottom: "1px solid var(--color-line)",
+              outline: "none",
+              padding: "2px 0",
+              lineHeight: 1.4,
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={startEditingText}
+            disabled={isPending}
+            aria-label={`${currentText} を編集`}
+            className="min-w-0 truncate text-left"
+            style={{
+              fontFamily: "var(--font-sans), sans-serif",
+              fontSize: todo.important ? 17 : 15,
+              fontWeight: todo.important ? 700 : 400,
+              color: checked ? "var(--color-ink-3)" : "var(--color-ink)",
+              textDecoration: checked ? "line-through" : "none",
+              textDecorationThickness: "1px",
+              lineHeight: 1.4,
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              cursor: "text",
+              flex: 1,
+            }}
+          >
+            {todo.important && (
+              <span className="sr-only">重要なタスク: </span>
+            )}
+            {currentText}
+          </button>
+        )}
+      </div>
 
       {/* 中央: bucket chip + carry chip。モバイルではコンパクト表示 */}
       <div
@@ -371,27 +506,75 @@ function TodoListRow({
             ↺
           </span>
         )}
-        {/* 時刻 or バケット表示。Round 9 review: aria-hidden を外して SR に
-            「いつやるか」が読まれるように。テキスト単体だと「13:00」「朝」など
-            短すぎて文脈が薄いので sr-only でラベル付ける。 */}
-        <span
-          style={{
-            fontFamily: "var(--font-mono), monospace",
-            fontSize: 10,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            padding: "4px 9px",
-            border: "1.2px solid var(--color-line)",
-            borderRadius: 10,
-            color: "var(--color-ink-3)",
-            background: "var(--color-bg)",
-          }}
-        >
-          <span className="sr-only">
-            {todo.time ? "予定時刻: " : "時間帯: "}
+        {/* 時刻 or バケット chip。Issue #40: bucket chip をタップで select に
+            切り替わり、変更で updateTodo (bucket) → refresh。
+            time が set されているときは HH:MM 表示で、編集 UI は出さない
+            (時刻編集は別 Issue)。 */}
+        {todo.time ? (
+          <span
+            style={{
+              fontFamily: "var(--font-mono), monospace",
+              fontSize: 10,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              padding: "4px 9px",
+              border: "1.2px solid var(--color-line)",
+              borderRadius: 10,
+              color: "var(--color-ink-3)",
+              background: "var(--color-bg)",
+            }}
+          >
+            <span className="sr-only">予定時刻: </span>
+            {todo.time}
           </span>
-          {todo.time ?? TODO_BUCKET_LABEL[todo.bucket]}
-        </span>
+        ) : isEditingBucket ? (
+          <select
+            autoFocus
+            defaultValue={todo.bucket}
+            onChange={(e) => commitBucketEdit(e.target.value as TodoBucket)}
+            onBlur={() => setIsEditingBucket(false)}
+            disabled={isPending}
+            aria-label={`${currentText} の時間帯を選択`}
+            style={{
+              fontFamily: "var(--font-mono), monospace",
+              fontSize: 11,
+              padding: "4px 6px",
+              border: "1.2px solid var(--color-line)",
+              borderRadius: 10,
+              color: "var(--color-ink)",
+              background: "var(--color-bg)",
+              cursor: "pointer",
+            }}
+          >
+            {TODO_BUCKETS.map((b) => (
+              <option key={b} value={b}>
+                {TODO_BUCKET_LABEL[b]}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <button
+            type="button"
+            onClick={() => !isPending && setIsEditingBucket(true)}
+            disabled={isPending}
+            aria-label={`${currentText} の時間帯を変更 (現在: ${TODO_BUCKET_LABEL[todo.bucket]})`}
+            style={{
+              fontFamily: "var(--font-mono), monospace",
+              fontSize: 10,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              padding: "4px 9px",
+              border: "1.2px solid var(--color-line)",
+              borderRadius: 10,
+              color: "var(--color-ink-3)",
+              background: "var(--color-bg)",
+              cursor: "pointer",
+            }}
+          >
+            <span className="sr-only">時間帯: </span>
+            {TODO_BUCKET_LABEL[todo.bucket]}
+          </button>
+        )}
         {showCarryAction && !checked && (
           <button
             type="button"

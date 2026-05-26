@@ -39,12 +39,12 @@ export function FlowClient({ flow, initialDate }: Props) {
   const [targetDate, setTargetDate] = useState<string>(
     () => initialDateValidated ?? defaultDateOptions(flow.type)[0].value,
   );
-  // Issue #46 新方針: ?date= で渡って来た場合は日付選択ステップを skip
-  // (= リンク側で日付が確定している)。そうでなければ「いつのセットアップ?」を
-  // 最初に出し、findExistingRecord で既存 record があれば ?edit= に redirect。
-  const [dateConfirmed, setDateConfirmed] = useState<boolean>(
-    initialDateValidated !== null,
-  );
+  // Issue #46 新方針 + team review P0: `?date=` 経由でも必ず日付選択 step を
+  // 経由させる。初期値だけ pre-fill して、ユーザーは「次へ」で
+  // findExistingRecord 経由で既存チェックする。これをやらないと
+  // `?date=` のリンクから来た場合に重複 record が作られる (server 側に
+  // (user, type, target_date) UNIQUE がないため)。
+  const [dateConfirmed, setDateConfirmed] = useState<boolean>(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -66,10 +66,9 @@ export function FlowClient({ flow, initialDate }: Props) {
   }
 
   function goBack() {
-    // Issue #46 新方針: 日付選択ステップを通った場合、step 0 から戻ると
-    // 日付選択に戻れるようにする。?date= で入った場合 (initialDateValidated 有り)
-    // は遷移元のリンクが日付込みなので date 選択には戻さない。
-    if (step === 0 && initialDateValidated === null) {
+    // Issue #46 新方針: 日付選択 step は常に経由する設計なので、step 0 で戻ると
+    // 日付選択 step に戻る (`?date=` 経由でも同じ)。
+    if (step === 0) {
       setDateConfirmed(false);
       return;
     }
@@ -225,9 +224,7 @@ export function FlowClient({ flow, initialDate }: Props) {
           <button
             type="button"
             onClick={goBack}
-            // PR #47 review: step=0 でも日付選択 step に戻れる (= initialDate
-            // で skip した場合のみ disabled)。
-            disabled={step === 0 && initialDateValidated !== null}
+            // step=0 でも日付選択 step に戻れる (= 常に back 有効)。
             className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             戻る

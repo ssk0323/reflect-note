@@ -213,14 +213,17 @@ export async function updateFlowRecord(
     return { ok: false, error: "ログインが必要です" };
   }
 
-  // 既存の answers / checks / type / created_at を取得。
+  // 既存の answers / checks / type / created_at / target_date を取得。
   // - type は target_date 正規化と方向判定に必要
   // - created_at は direction 判定の基準時刻として使う
   //   (今日「1 週間前の morning」を編集するとき、now=今日 だと future check が
   //    過去日扱いで失敗するため、レコード作成時点を基準にする)
+  // - target_date は team review P1 で「編集中の日付固定」を server 側でも担保
+  //   するため必要。クライアントの readOnly UI だけだと DevTools 経由で
+  //   送信される target_date を変えられてしまう。
   const { data: existing, error: fetchError } = await supabase
     .from("records")
-    .select("type, answers, checks, created_at")
+    .select("type, answers, checks, created_at, target_date")
     .eq("id", id)
     .maybeSingle();
 
@@ -241,6 +244,20 @@ export async function updateFlowRecord(
   );
   if (!normalizedTargetDate) {
     return { ok: false, error: "選択できない日付です" };
+  }
+
+  // team review P1: 編集中の target_date 固定を server 側でも担保する。
+  // 既に target_date が set されている record で別日に変えようとした場合は拒否。
+  // (legacy data = target_date NULL は「初めて日付を付ける」許可ケースなので通す)
+  if (
+    existing.target_date !== null &&
+    existing.target_date !== normalizedTargetDate
+  ) {
+    return {
+      ok: false,
+      error:
+        "編集中は日付を変更できません (別日に作成する場合はホームから新規作成してください)",
+    };
   }
 
   const oldAnswers = (existing.answers ?? {}) as FlowAnswers;

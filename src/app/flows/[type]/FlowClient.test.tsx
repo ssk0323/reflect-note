@@ -27,13 +27,24 @@ describe("FlowClient (morning)", () => {
   beforeEach(() => {
     saveFlowRecord.mockReset();
     findExistingRecord.mockReset();
+    // team review: 日付選択 step は常に経由する設計なので、各テストで
+    // findExistingRecord を「既存なし」モックして「次へ」で step 0 に入る。
+    findExistingRecord.mockResolvedValue({ ok: true, id: null });
     push.mockReset();
   });
 
-  it("shows the first question with progress 1/5", () => {
+  /** 日付選択 step を「次へ」で通過して step 0 に到達するためのヘルパー。
+   *  team review P0: 全テストで日付選択 step を経由するようになったため。 */
+  async function passDateStep(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "次へ" }));
+  }
+
+  it("shows the first question with progress 1/5", async () => {
+    const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
     expect(
-      screen.getByRole("heading", { name: morningFlow.questions[0].title }),
+      await screen.findByRole("heading", { name: morningFlow.questions[0].title }),
     ).toBeInTheDocument();
     expect(screen.getByText("1 / 5")).toBeInTheDocument();
   });
@@ -41,6 +52,7 @@ describe("FlowClient (morning)", () => {
   it("advances to the next question on 次へ", async () => {
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     await user.click(screen.getByRole("button", { name: "次へ" }));
 
@@ -53,6 +65,7 @@ describe("FlowClient (morning)", () => {
   it("goes back to the previous question on 戻る", async () => {
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     await user.click(screen.getByRole("button", { name: "次へ" }));
     await user.click(screen.getByRole("button", { name: "戻る" }));
@@ -62,14 +75,27 @@ describe("FlowClient (morning)", () => {
     ).toBeInTheDocument();
   });
 
-  it("disables 戻る on the first question", () => {
+  it("step 0 で戻るを押すと日付選択 step に戻る (常に有効)", async () => {
+    const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
-    expect(screen.getByRole("button", { name: "戻る" })).toBeDisabled();
+    await passDateStep(user);
+    // step 0 に居る
+    expect(
+      screen.getByRole("heading", { name: morningFlow.questions[0].title }),
+    ).toBeInTheDocument();
+    const back = screen.getByRole("button", { name: "戻る" });
+    expect(back).not.toBeDisabled();
+    await user.click(back);
+    // 日付選択 step に戻る
+    expect(
+      screen.getByRole("heading", { name: "いつのぶんを書きますか？" }),
+    ).toBeInTheDocument();
   });
 
   it("shows 一覧で確認する on the last question", async () => {
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
@@ -83,6 +109,7 @@ describe("FlowClient (morning)", () => {
   it("shows the confirmation screen with entered answers", async () => {
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     // 1問目: goal (textarea) に入力
     await user.type(screen.getByRole("textbox"), "今日の目標テスト");
@@ -106,6 +133,7 @@ describe("FlowClient (morning)", () => {
     saveFlowRecord.mockResolvedValue({ ok: true });
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     await user.type(screen.getByRole("textbox"), "目標");
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
@@ -126,6 +154,7 @@ describe("FlowClient (morning)", () => {
     saveFlowRecord.mockResolvedValue({ ok: false, error: "boom" });
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
@@ -140,6 +169,7 @@ describe("FlowClient (morning)", () => {
     saveFlowRecord.mockRejectedValue(new Error("network down"));
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} initialDate={todayKey} />);
+    await passDateStep(user);
 
     for (let i = 0; i < morningFlow.questions.length - 1; i++) {
       await user.click(screen.getByRole("button", { name: "次へ" }));
@@ -246,12 +276,15 @@ describe("FlowClient (night, group question)", () => {
   beforeEach(() => {
     saveFlowRecord.mockReset();
     findExistingRecord.mockReset();
+    findExistingRecord.mockResolvedValue({ ok: true, id: null });
     push.mockReset();
   });
 
   it("renders the timeUsage group with 4 sub-fields", async () => {
     const user = userEvent.setup();
     render(<FlowClient flow={nightFlow} initialDate={todayKey} />);
+    // 日付選択 step を経由
+    await user.click(screen.getByRole("button", { name: "次へ" }));
 
     // timeUsage は 6 問目 (index 5)。5 回「次へ」で到達
     for (let i = 0; i < 5; i++) {
@@ -271,6 +304,8 @@ describe("FlowClient (night, group question)", () => {
     saveFlowRecord.mockResolvedValue({ ok: true });
     const user = userEvent.setup();
     render(<FlowClient flow={nightFlow} initialDate={todayKey} />);
+    // 日付選択 step を経由
+    await user.click(screen.getByRole("button", { name: "次へ" }));
 
     // timeUsage の画面まで進める
     for (let i = 0; i < 5; i++) {

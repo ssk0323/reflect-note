@@ -43,8 +43,13 @@ export function EditClient({
   const [isPending, startTransition] = useTransition();
 
   // どこから来たかに応じてキャンセル先 / 保存後の遷移先を切替。
+  // team review P0: from=flow のキャンセル先に ?date= を付け、日付選択 step に
+  // 戻った時に「以前選んだ日」がそのまま pre-fill されるようにする
+  // (= 「明日を作ろうとして編集に飛んだ → キャンセル → 明日のまま」)。
   const isFromFlow = from === "flow";
-  const cancelHref = isFromFlow ? `/flows/${flow.type}` : "/history";
+  const cancelHref = isFromFlow
+    ? `/flows/${flow.type}?date=${targetDate}`
+    : "/history";
   const saveSuccessHref = isFromFlow ? "/" : "/history";
 
   function updateAnswer(key: string, value: string) {

@@ -5,6 +5,9 @@ import { toJstDateString } from "@/lib/records/targetDate";
 import { EditClient } from "./EditClient";
 import { FlowClient } from "./FlowClient";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 type PageProps = {
   params: Promise<{ type: string }>;
   searchParams: Promise<{ edit?: string; date?: string; from?: string }>;
@@ -23,6 +26,11 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
   const { edit, date, from } = await searchParams;
 
   if (edit) {
+    // team review P1: edit param に UUID 検証を入れて、不正値で Postgres の
+    // uuid cast エラー (22P02) を踏み 500 を返してしまう経路を 404 に倒す。
+    if (!UUID_RE.test(edit)) {
+      notFound();
+    }
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase
       .from("records")

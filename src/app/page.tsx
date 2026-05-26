@@ -190,6 +190,7 @@ export default async function Home() {
   // week/month も自動的に business day で揃う)。
   const dayEndExclusive = addDays(todayKey, 1);
   const yesterdayKey = addDays(todayKey, -1);
+  const tomorrowKey = addDays(todayKey, 1);
   const weekStart = startOfJstWeek(todayKey);
   const weekEndExclusive = addDays(weekStart, 7);
   const monthStart = startOfJstMonth(todayKey);
@@ -242,9 +243,20 @@ export default async function Home() {
     monthEndExclusive,
   );
 
-  // ToDo: 今日のリスト + 昨日の未完了 (朝の時間帯のみ提案表示)
-  const { todos, error: todosError } = await fetchTodosForDate(todayKey);
+  // ToDo: 前日 / 今日 / 翌日の 3 日分を fetch して TodoCard 内で切替表示できるように
+  // する (Issue #46 新方針)。Home の表示日は常に「今日」固定、ToDo セクションだけ
+  // 自前のタブで日付切替する。
+  const [
+    { todos: prevTodos, error: prevTodosError },
+    { todos, error: todosError },
+    { todos: nextTodos, error: nextTodosError },
+  ] = await Promise.all([
+    fetchTodosForDate(yesterdayKey),
+    fetchTodosForDate(todayKey),
+    fetchTodosForDate(tomorrowKey),
+  ]);
   const timeOfDay = pickTimeOfDay(now);
+  // carry 提案 (朝の「N 件を追加」) は「今日の朝」モード時のみ意味がある。
   const { todos: yesterdayPending, error: yesterdayPendingError } =
     timeOfDay === "morning"
       ? await fetchYesterdayPendingTodos(todayKey)
@@ -253,9 +265,13 @@ export default async function Home() {
   // データ取得エラーをまとめて UI に出すための集約。サイレント空表示は
   // 「データが無いのか / 取得に失敗したのか」をユーザーが区別できないため避ける
   // (Copilot review round 4)。
-  const dataErrors = [recentError, todosError, yesterdayPendingError].filter(
-    (e): e is string => typeof e === "string" && e.length > 0,
-  );
+  const dataErrors = [
+    recentError,
+    prevTodosError,
+    todosError,
+    nextTodosError,
+    yesterdayPendingError,
+  ].filter((e): e is string => typeof e === "string" && e.length > 0);
 
   // 挨拶は実時刻ベース ("こんばんは" は 23:30 にも 01:30 にも自然)。
   // 日付ラベルは business day ベース (00:00-03:59 に翌日表示にならないよう)。
@@ -281,9 +297,10 @@ export default async function Home() {
             minute: "2-digit",
           }).format(new Date(todayMorning.created_at))
         : undefined,
-      href: todayMorning
-        ? `/flows/morning?edit=${todayMorning.id}`
-        : "/flows/morning",
+      // Issue #46 新方針: ボタンは常に /flows/morning に飛ばし、FlowClient 側で
+      // 「いつのセットアップ?」ステップを最初に出す。既存 record があれば
+      // server action 経由で ?edit= にリダイレクトされる。
+      href: "/flows/morning",
     },
     {
       kind: "evening",
@@ -296,7 +313,7 @@ export default async function Home() {
             minute: "2-digit",
           }).format(new Date(todayNight.created_at))
         : undefined,
-      href: todayNight ? `/flows/night?edit=${todayNight.id}` : "/flows/night",
+      href: "/flows/night",
     },
     // 週/月の振り返りボタンは「常に表示」(チャットの仕様確認より)。
     // 完了済 (今週/今月の review record あり) なら done=true + doneTime + edit href。
@@ -439,10 +456,16 @@ export default async function Home() {
         monthRemainingLabel={`残り ${daysToMonthEnd}日`}
       />
 
-      {/* ToDo カード */}
+      {/* ToDo カード。前日/今日/翌日の 3 日分を渡し、TodoCard 内のタブで切替。
+          carry / proposal は「今日表示」時のみ意味があるので、TodoCard 側で
+          viewDate === todayDate のときだけ出すように制御する (Issue #46 新方針)。 */}
       <TodoCard
         todos={todos}
+        prevDayTodos={prevTodos}
+        nextDayTodos={nextTodos}
         todayDate={todayKey}
+        prevDayDate={yesterdayKey}
+        nextDayDate={tomorrowKey}
         timeOfDay={timeOfDay}
         showCarryAction={timeOfDay === "evening"}
         carryProposal={yesterdayPending}

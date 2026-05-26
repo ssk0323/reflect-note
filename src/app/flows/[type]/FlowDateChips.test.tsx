@@ -83,4 +83,40 @@ describe("FlowDateChips", () => {
     );
     expect(screen.getByText("いつの振り返りですか？")).toBeInTheDocument();
   });
+
+  // Issue #46: readOnly mode
+  it("readOnly のとき radio / date input は表示されず、選択中の日付ラベルが出る", () => {
+    render(
+      <FlowDateChips
+        type="morning"
+        value="2026-05-22"
+        onChange={() => {}}
+        now={may21noon}
+        readOnly
+      />,
+    );
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryByLabelText("日付を直接指定")).not.toBeInTheDocument();
+    // 選択中の日付情報が文字で表示される
+    expect(screen.getByText(/明日/)).toBeInTheDocument();
+    // 編集できない旨の説明
+    expect(
+      screen.getByText(/編集中は日付を変えられません/),
+    ).toBeInTheDocument();
+  });
+
+  it("readOnly でも onChange は呼ばれない", async () => {
+    const onChange = vi.fn();
+    render(
+      <FlowDateChips
+        type="morning"
+        value="2026-05-22"
+        onChange={onChange}
+        now={may21noon}
+        readOnly
+      />,
+    );
+    // 何もクリック可能要素が無い (radio も input も無い)
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

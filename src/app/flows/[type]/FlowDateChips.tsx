@@ -18,14 +18,21 @@ type Props = {
   onChange: (next: string) => void;
   // テスト用に固定時刻を渡す
   now?: Date;
+  /** Issue #46: 編集モードでは日付変更を不可にするための readonly 表示。
+   *  true のとき chip も date input も触れない (値だけ示す)。 */
+  readOnly?: boolean;
 };
 
 /** target_date の選択 UI。デフォルト 3 つの chip + ネイティブ date input。
  *
  *  実装メモ: ネイティブ <input type="radio"> + <label> を使う。
  *  キーボード操作 (Tab / 矢印キー / Space) はブラウザのネイティブ動作に任せる
- *  ことで ARIA Radio Group パターンを自前実装する必要をなくしている。 */
-export function FlowDateChips({ type, value, onChange, now }: Props) {
+ *  ことで ARIA Radio Group パターンを自前実装する必要をなくしている。
+ *
+ *  readOnly: 編集モード (EditClient) で「これは XX 日の記録」と表示するための
+ *  簡易表示。日付ピッカーを変更させない (= 既存 record の target_date を勝手に
+ *  動かさない、Issue #46)。 */
+export function FlowDateChips({ type, value, onChange, now, readOnly }: Props) {
   const options: DateOption[] = defaultDateOptions(type, now ?? new Date());
   const direction = flowDirection(type);
   const headline = direction === "future" ? "いつの分を書きますか？" : "いつの振り返りですか？";
@@ -44,6 +51,31 @@ export function FlowDateChips({ type, value, onChange, now }: Props) {
     const normalized = normalizeTargetDate(type, raw);
     if (!isAllowedDirection(type, normalized, now ?? new Date())) return;
     onChange(normalized);
+  }
+
+  // readOnly: 編集モードでは記録の日付が動かないことを明示。
+  // 選択中の option の label/detail を 1 行で表示するだけにする。
+  if (readOnly) {
+    const selectedOption = options.find((o) => o.value === value);
+    const display = selectedOption
+      ? `${selectedOption.label} (${selectedOption.detail})`
+      : value;
+    return (
+      <fieldset
+        aria-readonly="true"
+        className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <legend className="px-1 text-xs font-semibold text-zinc-600 dark:text-zinc-400">
+          {headline}
+        </legend>
+        <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+          {display}
+        </p>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          編集中は日付を変えられません (別日に作成する場合はホームから新規作成)
+        </p>
+      </fieldset>
+    );
   }
 
   return (

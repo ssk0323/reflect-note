@@ -119,6 +119,39 @@ describe("EditClient", () => {
     expect(cancel).toHaveAttribute("href", "/history");
   });
 
+  it("from=flow のときキャンセル先は /flows/<type>?date=<targetDate> (= 日付選択 step に戻り pre-fill)", () => {
+    render(
+      <EditClient
+        flow={morningFlow}
+        recordId="abc"
+        initialAnswers={{}}
+        initialTargetDate="2026-05-27"
+        initialFallbackDate="2026-05-21"
+        from="flow"
+      />,
+    );
+    const cancel = screen.getByRole("link", { name: "キャンセル" });
+    // team review: ?date= で initialTargetDate を渡し直し、選択日が消えない
+    expect(cancel).toHaveAttribute("href", "/flows/morning?date=2026-05-27");
+  });
+
+  it("from=flow のとき保存後は / (ホーム) に遷移する", async () => {
+    updateFlowRecord.mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <EditClient
+        flow={morningFlow}
+        recordId="abc"
+        initialAnswers={{}}
+        initialTargetDate="2026-05-21"
+        initialFallbackDate="2026-05-21"
+        from="flow"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "保存する" }));
+    expect(push).toHaveBeenCalledWith("/");
+  });
+
   it("旧データ (target_date NULL) の編集では initialFallbackDate を保存時に渡す", async () => {
     // Codex/Copilot P1 指摘: NULL の旧レコードを保存しただけで today に書き換わる回帰を防ぐ
     updateFlowRecord.mockResolvedValue({ ok: true });

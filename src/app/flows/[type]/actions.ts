@@ -11,6 +11,49 @@ import {
 
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
+export type FindExistingResult =
+  | { ok: true; id: string | null }
+  | { ok: false; error: string };
+
+/** Issue #46 新方針: 朝のセットアップ等で「日付を選んだら既存 record があるか
+ *  チェックして edit モードへ自動切替」するための server action。
+ *  RLS で他人の record は弾かれる。同 (user, type, target_date) で複数 record
+ *  ある場合は最新 (created_at desc) の id を返す。 */
+export async function findExistingRecord(
+  type: FlowType,
+  targetDate: string,
+): Promise<FindExistingResult> {
+  if (!FLOW_TYPES.includes(type)) {
+    return { ok: false, error: `不正なフロー種別: ${type}` };
+  }
+  if (!isValidDateString(targetDate)) {
+    return { ok: false, error: "日付が不正です" };
+  }
+  const normalized = normalizeTargetDate(type, targetDate);
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "ログインが必要です" };
+
+  const { data, error } = await supabase
+    .from("records")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("type", type)
+    .eq("target_date", normalized)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("findExistingRecord failed", error);
+    return { ok: false, error: "既存記録の確認に失敗しました" };
+  }
+  return { ok: true, id: data?.id ?? null };
+}
+
 /** 朝のセットアップで入力された task1/2/3 を todos テーブルに自動連携する。
  *  Issue #38 拡張 (B): 朝の宣言が ToDo 画面に出てこないと「実行する場」と
  *  「宣言する場」が分断されてしまうので、朝の record INSERT 成功時に morning
@@ -170,14 +213,17 @@ export async function updateFlowRecord(
     return { ok: false, error: "ログインが必要です" };
   }
 
-  // 既存の answers / checks / type / created_at を取得。
+  // 既存の answers / checks / type / created_at / target_date を取得。
   // - type は target_date 正規化と方向判定に必要
   // - created_at は direction 判定の基準時刻として使う
   //   (今日「1 週間前の morning」を編集するとき、now=今日 だと future check が
   //    過去日扱いで失敗するため、レコード作成時点を基準にする)
+  // - target_date は team review P1 で「編集中の日付固定」を server 側でも担保
+  //   するため必要。クライアントの readOnly UI だけだと DevTools 経由で
+  //   送信される target_date を変えられてしまう。
   const { data: existing, error: fetchError } = await supabase
     .from("records")
-    .select("type, answers, checks, created_at")
+    .select("type, answers, checks, created_at, target_date")
     .eq("id", id)
     .maybeSingle();
 
@@ -198,6 +244,20 @@ export async function updateFlowRecord(
   );
   if (!normalizedTargetDate) {
     return { ok: false, error: "選択できない日付です" };
+  }
+
+  // team review P1: 編集中の target_date 固定を server 側でも担保する。
+  // 既に target_date が set されている record で別日に変えようとした場合は拒否。
+  // (legacy data = target_date NULL は「初めて日付を付ける」許可ケースなので通す)
+  if (
+    existing.target_date !== null &&
+    existing.target_date !== normalizedTargetDate
+  ) {
+    return {
+      ok: false,
+      error:
+        "編集中は日付を変更できません (別日に作成する場合はホームから新規作成してください)",
+    };
   }
 
   const oldAnswers = (existing.answers ?? {}) as FlowAnswers;

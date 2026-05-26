@@ -3,22 +3,49 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Flow, FlowAnswers, Question } from "@/lib/flows";
-import { defaultDateOptions, formatTargetLabel } from "@/lib/records/targetDate";
-import { saveFlowRecord } from "./actions";
+import {
+  defaultDateOptions,
+  flowDirection,
+  formatTargetLabel,
+  isAllowedDirection,
+  isValidDateString,
+  normalizeTargetDate,
+} from "@/lib/records/targetDate";
+import { findExistingRecord, saveFlowRecord } from "./actions";
 import { FlowDateChips } from "./FlowDateChips";
 
 type Props = {
   flow: Flow;
+  /** Issue #46: ?date=YYYY-MM-DD で初期 targetDate を pre-fill する経路。
+   *  Home の date selector から「別日の morning を作る」リンクで使う。 */
+  initialDate?: string;
 };
 
-export function FlowClient({ flow }: Props) {
+export function FlowClient({ flow, initialDate }: Props) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<FlowAnswers>({});
-  // target_date のデフォルトはそのフローの「今」(defaultDateOptions の先頭)
+  // target_date のデフォルト: ?date= で受け取った値があり、かつ flow の direction
+  // 制約 (例: morning は未来も OK、weeklyReview は過去のみ等) を満たせばそれを採用。
+  // 不正なら従来の「フローの今」(defaultDateOptions[0]) にフォールバック。
+  const initialDateValidated = (() => {
+    if (initialDate && isValidDateString(initialDate)) {
+      const normalized = normalizeTargetDate(flow.type, initialDate);
+      if (isAllowedDirection(flow.type, normalized, new Date())) {
+        return normalized;
+      }
+    }
+    return null;
+  })();
   const [targetDate, setTargetDate] = useState<string>(
-    () => defaultDateOptions(flow.type)[0].value,
+    () => initialDateValidated ?? defaultDateOptions(flow.type)[0].value,
   );
+  // Issue #46 新方針 + team review P0: `?date=` 経由でも必ず日付選択 step を
+  // 経由させる。初期値だけ pre-fill して、ユーザーは「次へ」で
+  // findExistingRecord 経由で既存チェックする。これをやらないと
+  // `?date=` のリンクから来た場合に重複 record が作られる (server 側に
+  // (user, type, target_date) UNIQUE がないため)。
+  const [dateConfirmed, setDateConfirmed] = useState<boolean>(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -40,6 +67,12 @@ export function FlowClient({ flow }: Props) {
   }
 
   function goBack() {
+    // Issue #46 新方針: 日付選択 step は常に経由する設計なので、step 0 で戻ると
+    // 日付選択 step に戻る (`?date=` 経由でも同じ)。
+    if (step === 0) {
+      setDateConfirmed(false);
+      return;
+    }
     setStep((s) => Math.max(0, s - 1));
   }
 
@@ -61,6 +94,92 @@ export function FlowClient({ flow }: Props) {
   }
 
   const targetLabel = formatTargetLabel(flow.type, targetDate);
+
+  function handleDateConfirm() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const result = await findExistingRecord(flow.type, targetDate);
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        if (result.id) {
+          // 既存 record あり → 編集モードへ。
+          // from=flow を付けて EditClient 側で「キャンセルで日付選択に戻る」
+          // 「保存後ホームへ戻る」を切り替えできるようにする。
+          router.push(`/flows/${flow.type}?edit=${result.id}&from=flow`);
+          return;
+        }
+        // 既存無し → 通常の作成フロー (step 0 へ)
+        setDateConfirmed(true);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "確認に失敗しました";
+        setError(message);
+      }
+    });
+  }
+
+  // Issue #46 新方針: 日付選択ステップ。初期表示で日付を聞く。
+  // PR #47 review: flow.type の direction (future / past) で見出しを出し分ける。
+  // future (morning など) は「いつのぶんを書きますか？」、past (night /
+  // weeklyReview / monthlyReview など) は「いつの振り返りですか？」。
+  // FlowDateChips の見出しロジックと一致させる。
+  if (!dateConfirmed) {
+    const headline =
+      flowDirection(flow.type) === "future"
+        ? "いつのぶんを書きますか？"
+        : "いつの振り返りですか？";
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-6 sm:py-10">
+        <header className="mb-6">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            {flow.label}
+          </p>
+          <h1 className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+            {headline}
+          </h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            日付を選んでください。すでにその日の記録があれば編集モードで開きます。
+          </p>
+        </header>
+
+        <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+          <FlowDateChips
+            type={flow.type}
+            value={targetDate}
+            onChange={setTargetDate}
+          />
+          {error && (
+            <p
+              role="alert"
+              className="mt-4 text-sm text-rose-600 dark:text-rose-400"
+            >
+              {error}
+            </p>
+          )}
+          <div className="mt-6 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              disabled={isPending}
+              className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:opacity-60"
+            >
+              戻る
+            </button>
+            <button
+              type="button"
+              onClick={handleDateConfirm}
+              disabled={isPending}
+              className="rounded-2xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800 disabled:opacity-60"
+            >
+              {isPending ? "確認中..." : "次へ"}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   if (showConfirm) {
     return (
@@ -86,15 +205,9 @@ export function FlowClient({ flow }: Props) {
       </header>
 
       <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8">
-        {step === 0 && (
-          <div className="mb-6">
-            <FlowDateChips
-              type={flow.type}
-              value={targetDate}
-              onChange={setTargetDate}
-            />
-          </div>
-        )}
+        {/* PR #47 review: 日付は専用 step で選び終わっているので、質問ステップ
+            では FlowDateChips を出さない (二重 UI 回避)。確認画面 (ConfirmScreen)
+            では targetLabel で日付を表示する。 */}
         <div className="mb-8">
           <div className="mb-3 flex items-center justify-between text-xs font-semibold text-zinc-500">
             <span>
@@ -120,7 +233,7 @@ export function FlowClient({ flow }: Props) {
           <button
             type="button"
             onClick={goBack}
-            disabled={step === 0}
+            // step=0 でも日付選択 step に戻れる (= 常に back 有効)。
             className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             戻る

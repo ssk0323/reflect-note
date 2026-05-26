@@ -195,15 +195,9 @@ export function FlowClient({ flow, initialDate }: Props) {
       </header>
 
       <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-8">
-        {step === 0 && (
-          <div className="mb-6">
-            <FlowDateChips
-              type={flow.type}
-              value={targetDate}
-              onChange={setTargetDate}
-            />
-          </div>
-        )}
+        {/* PR #47 review: 日付は専用 step で選び終わっているので、質問ステップ
+            では FlowDateChips を出さない (二重 UI 回避)。確認画面 (ConfirmScreen)
+            では targetLabel で日付を表示する。 */}
         <div className="mb-8">
           <div className="mb-3 flex items-center justify-between text-xs font-semibold text-zinc-500">
             <span>
@@ -229,7 +223,9 @@ export function FlowClient({ flow, initialDate }: Props) {
           <button
             type="button"
             onClick={goBack}
-            disabled={step === 0}
+            // PR #47 review: step=0 でも日付選択 step に戻れる (= initialDate
+            // で skip した場合のみ disabled)。
+            disabled={step === 0 && initialDateValidated !== null}
             className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-sm font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             戻る

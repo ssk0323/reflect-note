@@ -205,6 +205,39 @@ describe("FlowClient date selection step (Issue #46)", () => {
     await user.click(screen.getByRole("button", { name: "次へ" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("確認失敗");
   });
+
+  it("質問 step では FlowDateChips の見出し「いつのぶんを書きますか？」は出ない", async () => {
+    findExistingRecord.mockResolvedValue({ ok: true, id: null });
+    const user = userEvent.setup();
+    render(<FlowClient flow={morningFlow} />);
+    await user.click(screen.getByRole("button", { name: "次へ" }));
+    // 日付選択画面の見出しが残らない (PR #47 review)
+    expect(
+      await screen.findByRole("heading", { name: morningFlow.questions[0].title }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "いつのぶんを書きますか？" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("質問 step 0 で「戻る」を押すと日付選択画面に戻る (initialDate 無し時)", async () => {
+    findExistingRecord.mockResolvedValue({ ok: true, id: null });
+    const user = userEvent.setup();
+    render(<FlowClient flow={morningFlow} />);
+    await user.click(screen.getByRole("button", { name: "次へ" }));
+    // 質問 step に居る
+    expect(
+      await screen.findByRole("heading", { name: morningFlow.questions[0].title }),
+    ).toBeInTheDocument();
+    // 戻るボタンが押せる (disabled でない)
+    const back = screen.getByRole("button", { name: "戻る" });
+    expect(back).not.toBeDisabled();
+    await user.click(back);
+    // 日付選択画面に戻る
+    expect(
+      screen.getByRole("heading", { name: "いつのぶんを書きますか？" }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("FlowClient (night, group question)", () => {

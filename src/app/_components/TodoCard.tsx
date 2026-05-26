@@ -231,7 +231,9 @@ export function TodoCard({
   return (
     <article
       className="sk-card"
-      aria-label="本日の ToDo"
+      // PR #47 review: 前日/今日/翌日 タブで内容が切り替わるので「本日の」を外し、
+      // 汎用ラベルに変更 (SR には日付タブの aria-pressed で見分けがつく)
+      aria-label="ToDo"
       style={{
         padding: 18,
         borderColor: "var(--color-ink)",
@@ -263,18 +265,19 @@ export function TodoCard({
             = 大事な 3 つ
           </span>
         </div>
-        {/* Issue #46 新方針: ToDo セクション内の日付タブ */}
+        {/* Issue #46 新方針: ToDo セクション内の日付セレクタ。
+            PR #47 review: ARIA Tabs パターンの要件 (矢印キー / roving tabindex /
+            aria-controls + tabpanel) を満たさないため `role="tab"` は使わず、
+            segmented control 風の通常 button + aria-pressed に降格。 */}
         {(prevDayDate || nextDayDate) && (
           <div
             className="flex items-center gap-1"
-            role="tablist"
             aria-label="表示する日"
           >
             {prevDayDate && (
               <button
                 type="button"
-                role="tab"
-                aria-selected={isViewingPrev}
+                aria-pressed={isViewingPrev}
                 onClick={() => setViewDate(prevDayDate)}
                 className="sk-chip"
                 style={{
@@ -294,8 +297,7 @@ export function TodoCard({
             )}
             <button
               type="button"
-              role="tab"
-              aria-selected={isViewingToday}
+              aria-pressed={isViewingToday}
               onClick={() => setViewDate(todayDate)}
               className="sk-chip"
               style={{
@@ -315,8 +317,7 @@ export function TodoCard({
             {nextDayDate && (
               <button
                 type="button"
-                role="tab"
-                aria-selected={!isViewingToday && !isViewingPrev}
+                aria-pressed={!isViewingToday && !isViewingPrev}
                 onClick={() => setViewDate(nextDayDate)}
                 className="sk-chip"
                 style={{

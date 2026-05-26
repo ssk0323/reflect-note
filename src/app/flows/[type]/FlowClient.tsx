@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { Flow, FlowAnswers, Question } from "@/lib/flows";
 import {
   defaultDateOptions,
+  flowDirection,
   formatTargetLabel,
   isAllowedDirection,
   isValidDateString,
@@ -119,8 +120,16 @@ export function FlowClient({ flow, initialDate }: Props) {
     });
   }
 
-  // Issue #46 新方針: 日付選択ステップ。初期表示で「いつのセットアップ?」を聞く。
+  // Issue #46 新方針: 日付選択ステップ。初期表示で日付を聞く。
+  // PR #47 review: flow.type の direction (future / past) で見出しを出し分ける。
+  // future (morning など) は「いつのぶんを書きますか？」、past (night /
+  // weeklyReview / monthlyReview など) は「いつの振り返りですか？」。
+  // FlowDateChips の見出しロジックと一致させる。
   if (!dateConfirmed) {
+    const headline =
+      flowDirection(flow.type) === "future"
+        ? "いつのぶんを書きますか？"
+        : "いつの振り返りですか？";
     return (
       <main className="mx-auto max-w-3xl px-4 py-6 sm:py-10">
         <header className="mb-6">
@@ -128,7 +137,7 @@ export function FlowClient({ flow, initialDate }: Props) {
             {flow.label}
           </p>
           <h1 className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">
-            いつのぶんを書きますか？
+            {headline}
           </h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
             日付を選んでください。すでにその日の記録があれば編集モードで開きます。

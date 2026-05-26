@@ -726,9 +726,9 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
-    expect(screen.getByRole("tab", { name: "前日" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "今日" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "翌日" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "前日" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "今日" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "翌日" })).toBeInTheDocument();
     // 初期表示は今日
     expect(screen.getByText("今日のタスク")).toBeInTheDocument();
     expect(screen.queryByText("前日のタスク")).not.toBeInTheDocument();
@@ -745,7 +745,7 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
-    await user.click(screen.getByRole("tab", { name: "翌日" }));
+    await user.click(screen.getByRole("button", { name: "翌日" }));
     expect(screen.getByText("翌日のタスク")).toBeInTheDocument();
     expect(screen.queryByText("今日のタスク")).not.toBeInTheDocument();
   });
@@ -762,7 +762,7 @@ describe("TodoCard", () => {
         showCarryAction={false}
       />,
     );
-    await user.click(screen.getByRole("tab", { name: "翌日" }));
+    await user.click(screen.getByRole("button", { name: "翌日" }));
     const input = screen.getByLabelText("タスクの内容");
     await user.type(input, "明日のタスク{Enter}");
     expect(createTodo).toHaveBeenCalledWith(
@@ -789,7 +789,7 @@ describe("TodoCard", () => {
       screen.getByLabelText("「今日タスク」を明日に引き継ぐ"),
     ).toBeInTheDocument();
     // 翌日タブに切替後、carry ボタンは消える
-    await user.click(screen.getByRole("tab", { name: "翌日" }));
+    await user.click(screen.getByRole("button", { name: "翌日" }));
     expect(
       screen.queryByLabelText("「明日タスク」を明日に引き継ぐ"),
     ).not.toBeInTheDocument();

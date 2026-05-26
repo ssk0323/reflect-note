@@ -185,13 +185,15 @@ describe("FlowClient date selection step (Issue #46)", () => {
     ).toBeInTheDocument();
   });
 
-  it("「次へ」で既存 record が見つかったら /flows/morning?edit=<id> に router.push", async () => {
+  it("「次へ」で既存 record が見つかったら /flows/morning?edit=<id>&from=flow に router.push", async () => {
     findExistingRecord.mockResolvedValue({ ok: true, id: "rec-123" });
     const user = userEvent.setup();
     render(<FlowClient flow={morningFlow} />);
     await user.click(screen.getByRole("button", { name: "次へ" }));
     await vi.waitFor(() =>
-      expect(push).toHaveBeenCalledWith("/flows/morning?edit=rec-123"),
+      expect(push).toHaveBeenCalledWith(
+        "/flows/morning?edit=rec-123&from=flow",
+      ),
     );
   });
 

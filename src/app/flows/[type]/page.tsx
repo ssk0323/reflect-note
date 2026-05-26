@@ -7,7 +7,7 @@ import { FlowClient } from "./FlowClient";
 
 type PageProps = {
   params: Promise<{ type: string }>;
-  searchParams: Promise<{ edit?: string; date?: string }>;
+  searchParams: Promise<{ edit?: string; date?: string; from?: string }>;
 };
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
     notFound();
   }
 
-  const { edit, date } = await searchParams;
+  const { edit, date, from } = await searchParams;
 
   if (edit) {
     const supabase = await createSupabaseServerClient();
@@ -47,6 +47,8 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
 
     // recordId が変わったら EditClient を再マウントして state をリセット。
     // useState は初回しか初期化されないため、key で remount を強制する。
+    // PR #47 review: from=flow なら「キャンセルで日付選択に戻る」「保存後ホーム」
+    // それ以外 (history 経由など) は従来通り /history に戻す。
     return (
       <EditClient
         key={data.id}
@@ -55,6 +57,7 @@ export default async function FlowPage({ params, searchParams }: PageProps) {
         initialAnswers={data.answers}
         initialTargetDate={data.target_date}
         initialFallbackDate={fallbackDate}
+        from={from}
       />
     );
   }

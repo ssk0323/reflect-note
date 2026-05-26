@@ -18,6 +18,9 @@ type Props = {
    *  週/月フローでは正規化済み)。ユーザーが明示的に変更しない限り保存時に日付が
    *  書き換わらないようにするため、サーバ側で計算して渡す。 */
   initialFallbackDate: string;
+  /** PR #47 review: from=flow なら「キャンセルで日付選択に戻る」「保存後ホーム」、
+   *  それ以外 (history からの編集) は従来通り /history へ戻す。 */
+  from?: string;
 };
 
 export function EditClient({
@@ -26,6 +29,7 @@ export function EditClient({
   initialAnswers,
   initialTargetDate,
   initialFallbackDate,
+  from,
 }: Props) {
   const router = useRouter();
   const [answers, setAnswers] = useState<FlowAnswers>(initialAnswers);
@@ -38,6 +42,11 @@ export function EditClient({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // どこから来たかに応じてキャンセル先 / 保存後の遷移先を切替。
+  const isFromFlow = from === "flow";
+  const cancelHref = isFromFlow ? `/flows/${flow.type}` : "/history";
+  const saveSuccessHref = isFromFlow ? "/" : "/history";
+
   function updateAnswer(key: string, value: string) {
     setAnswers((prev) => ({ ...prev, [key]: value }));
   }
@@ -48,7 +57,7 @@ export function EditClient({
       try {
         const result = await updateFlowRecord(recordId, answers, targetDate);
         if (result.ok) {
-          router.push("/history");
+          router.push(saveSuccessHref);
         } else {
           setError(result.error ?? "保存に失敗しました");
         }
@@ -103,7 +112,7 @@ export function EditClient({
 
         <div className="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <Link
-            href="/history"
+            href={cancelHref}
             className="rounded-2xl border border-zinc-300 bg-white px-5 py-3 text-center text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
             キャンセル

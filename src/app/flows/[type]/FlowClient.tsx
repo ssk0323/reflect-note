@@ -105,8 +105,10 @@ export function FlowClient({ flow, initialDate }: Props) {
           return;
         }
         if (result.id) {
-          // 既存 record あり → 編集モードへ
-          router.push(`/flows/${flow.type}?edit=${result.id}`);
+          // 既存 record あり → 編集モードへ。
+          // from=flow を付けて EditClient 側で「キャンセルで日付選択に戻る」
+          // 「保存後ホームへ戻る」を切り替えできるようにする。
+          router.push(`/flows/${flow.type}?edit=${result.id}&from=flow`);
           return;
         }
         // 既存無し → 通常の作成フロー (step 0 へ)
